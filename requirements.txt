@@ -1,0 +1,12 @@
+aiogram>=3.0
+httpx
+yt-dlp
+groq
+google-auth
+google-api-python-client
+apscheduler
+ddgs
+pymorphy3
+psutil
+pytz
+python-dotenv

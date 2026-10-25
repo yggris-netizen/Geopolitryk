@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.bak
+.idea/
+.env
+
+seen_videos.db
+*.db
+service_account.json
+
+audio.*
+audio.part*.m4a
