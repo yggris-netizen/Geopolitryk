@@ -6,6 +6,10 @@ YouTube → Telegram бот: аналитические выжимки.
 Версия БЕЗ новостных дайджестов (RSS).
 Сохраняет выжимки экспертов в video_summaries для будущего сравнения повестки.
 
+Этап 1 декомпозиции:
+  - Константы → config.py
+  - SQLite → db/ (connection, queue, predictions, summaries, experts, videos)
+
 Версия 3 (post-run fixes):
   - Разбивка длинных сообщений >4096 символов (Telegram limit)
   - Очистка мусорных окончаний в именах (Сытникнуть → Сытник)
@@ -50,12 +54,6 @@ if sys.platform == "win32":
         print(f"⚠️  WindowsSelectorEventLoopPolicy: {_e}")
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
 except (AttributeError, ValueError):
@@ -92,110 +90,40 @@ except ImportError:
 
 from experts import KNOWN_EXPERT_BIOS, KNOWN_EXPERT_FULL
 
+from config import *
+from db.connection import _init_db, _cleanup_temp_files, _maybe_trim_caches
+from db.queue import (
+    _add_task_to_queue, _get_next_pending_task, _mark_task_processing,
+    _mark_task_done, _mark_task_retry, _handle_task_failure,
+    _cancel_task, _reset_queue, _queue_stats, _queue_list,
+    _recent_errors, _cleanup_done_tasks,
+)
+from db.predictions import (
+    _save_predictions, _recent_predictions, get_expert_priority_rating,
+)
+from db.summaries import _save_summary
+from db.experts import (
+    _get_today_msk, _get_experts_seen_today,
+    _mark_expert_seen_today, _cleanup_old_experts,
+)
+from db.videos import _is_video_processed, _mark_video_processed
+
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║                    НАСТРОЙКИ                             ║
+# ║           КЭШИ YOUTUBE (только в памяти)                  ║
 # ╚══════════════════════════════════════════════════════════╝
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
-
-WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
-GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-
-MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
-DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
-WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
-GROQ_MAX_CHUNK_SECONDS = int(os.getenv("GROQ_MAX_CHUNK_SECONDS", "300"))
-HEARTBEAT_HOURS = int(os.getenv("HEARTBEAT_HOURS", "0"))
-
-GROQ_MAX_SIZE_MB = 24.0
-
-TELEGRAM_MAX_LEN = 4096
-
-_creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-if _creds_json:
-    _creds_json = _creds_json.strip()
-    if len(_creds_json) >= 2 and _creds_json[0] == '"' and _creds_json[-1] == '"':
-        _creds_json = _creds_json[1:-1]
-    _creds_json = _creds_json.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-    try:
-        _parsed_creds = json.loads(_creds_json)
-        if not isinstance(_parsed_creds, dict) or "type" not in _parsed_creds:
-            raise ValueError("JSON не содержит поля 'type'")
-    except json.JSONDecodeError as _e:
-        print(f"❌ GOOGLE_CREDENTIALS_JSON невалиден: {_e}")
-        print(f"   Первые 80 символов: {_creds_json[:80]!r}")
-        sys.exit(1)
-    _creds_json = json.dumps(_parsed_creds, ensure_ascii=False)
-    _creds_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-    _creds_tmp.write(_creds_json)
-    _creds_tmp.close()
-    SERVICE_ACCOUNT_FILE = _creds_tmp.name
-else:
-    SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
-
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
-
-CHANNELS_TO_WATCH = [
-    {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест", "type": "author", "owner": "Александр Шелест"},
-    {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник",   "type": "author", "owner": "Руслан Бортник"},
-    {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live",       "type": "author", "owner": "Виталий Дикий"},
-    {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС",         "type": "media"},
-    {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online",  "type": "media"},
-    {"id": "UCxkdtxa54kQLRmmWaBH0K2w", "name": "UKRLIFETV",        "type": "media"},
-]
-
-TEST_VIDEO_URL = ""
-TEST_VIDEO_TITLE = ""
-
-VIDEO_LANGUAGE = "ru"
-
-DB_PATH = os.getenv("DB_PATH", "seen_videos.db")
-
-CHECK_INTERVAL_HOURS = 3
-WORKER_POLL_INTERVAL = 5
-
-HOURS_BACK = int(os.getenv("HOURS_BACK", "12"))
-DAYS_BACK = HOURS_BACK / 24
-
-MIN_VIDEO_DURATION_SECONDS = 180
-MAX_VIDEO_DURATION_SECONDS = 5400
-MAX_VIDEOS_PER_CHANNEL_PER_CHECK = int(os.getenv("MAX_VIDEOS_PER_CHANNEL_PER_CHECK", "5"))
-MAX_REPEAT_EXPERTS_PER_CYCLE = 2
-MIN_TRANSCRIPT_CHARS = 100
 
 _YOUTUBE_UPLOADS_CACHE = {}
 _YOUTUBE_VIDEOS_CACHE = {}
 _YOUTUBE_DURATIONS_CACHE = {}
-YOUTUBE_VIDEOS_CACHE_TTL = 1800
-YOUTUBE_DURATIONS_CACHE_TTL = 86400
-YOUTUBE_CACHE_MAX_ENTRIES = 1000
 
 _QUOTA_USED = {"count": 0, "date": "", "by_op": {}}
-YOUTUBE_DAILY_QUOTA = 10000
 
 _SHUTDOWN_EVENT = None
 
-NEUTRALIZE_TITLE = True
-MAX_TITLE_LEN = 90
-GENERATE_HASHTAGS = True
-
-EXTRACT_PREDICTIONS = True
-MAX_PREDICTIONS_PER_VIDEO = 10
-MAX_PREDICTION_HORIZON_YEARS = 5
-
-GROQ_DELAY_BETWEEN_CHUNKS = 5
-GROQ_MAX_RETRIES = 5
-
-DISPLAY_TIMEZONE_OFFSET = 3
-
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║         ДИАГНОСТИКА + КВОТА + УТИЛИТЫ                    ║
+# ║         ДИАГНОСТИКА + КВОТА                              ║
 # ╚══════════════════════════════════════════════════════════╝
 
 def _log_memory(stage: str = ""):
@@ -207,31 +135,6 @@ def _log_memory(stage: str = ""):
         print(f"   💾 [{stage}] RAM: {mem_mb:.0f} MB")
     except Exception:
         pass
-
-
-def _cleanup_temp_files():
-    cwd = os.getcwd()
-    try:
-        for f in os.listdir(cwd):
-            if f == "audio.mp3" or (f.startswith("audio.part") and f.endswith(".m4a")):
-                try:
-                    os.remove(os.path.join(cwd, f))
-                    print(f"🧹 Удалён остаток: {f}")
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-def _maybe_trim_caches():
-    if len(_YOUTUBE_VIDEOS_CACHE) > YOUTUBE_CACHE_MAX_ENTRIES:
-        keys = list(_YOUTUBE_VIDEOS_CACHE.keys())[:len(_YOUTUBE_VIDEOS_CACHE) // 2]
-        for k in keys:
-            _YOUTUBE_VIDEOS_CACHE.pop(k, None)
-    if len(_YOUTUBE_DURATIONS_CACHE) > YOUTUBE_CACHE_MAX_ENTRIES:
-        keys = list(_YOUTUBE_DURATIONS_CACHE.keys())[:len(_YOUTUBE_DURATIONS_CACHE) // 2]
-        for k in keys:
-            _YOUTUBE_DURATIONS_CACHE.pop(k, None)
 
 
 def _quota_tick(op: str, cost: int = 1):
@@ -253,40 +156,6 @@ def _quota_info() -> dict:
 def _is_quota_error(e: Exception) -> bool:
     s = str(e).lower()
     return "quotaexceeded" in s or ("quota" in s and "exceeded" in s)
-
-
-# ─── Классификация ошибок ──────────────────────────────────
-
-_FATAL_ERROR_MARKERS = (
-    "too_short:", "too_long:", "transcript_too_short:",
-    "ffmpeg_split_failed", "chunk_too_big",
-    "video unavailable", "private video", "deleted video",
-    "http error 404", "http error 410",
-    "message is too long",
-    "chat not found", "bot was blocked",
-)
-
-_TRANSIENT_ERROR_MARKERS = (
-    "429", "rate_limit", "rate limit", "quotaexceeded",
-    "timeout", "timed out", "connectionerror", "connection error",
-    "connection reset", "remotedisconnected",
-    "service unavailable", "bad gateway",
-    " 500", " 502", " 503", " 504",
-    "internal server error",
-)
-
-
-def _classify_error(reason: str) -> str:
-    if not reason:
-        return "unknown"
-    r = reason.lower()
-    for m in _FATAL_ERROR_MARKERS:
-        if m in r:
-            return "fatal"
-    for m in _TRANSIENT_ERROR_MARKERS:
-        if m in r:
-            return "transient"
-    return "unknown"
 
 
 def _split_audio(src: str, chunk_seconds: int) -> list:
@@ -423,429 +292,6 @@ print()
 
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║            SQLITE                                         ║
-# ╚══════════════════════════════════════════════════════════╝
-
-def _init_db():
-    db_dir = os.path.dirname(os.path.abspath(DB_PATH))
-    if db_dir:
-        try:
-            os.makedirs(db_dir, exist_ok=True)
-        except Exception:
-            pass
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS processed_videos ("
-        "video_id TEXT PRIMARY KEY, "
-        "processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS predictions ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "video_id TEXT NOT NULL, "
-        "expert_name TEXT NOT NULL, "
-        "channel_name TEXT, "
-        "prediction_text TEXT NOT NULL, "
-        "prediction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-        "verdict TEXT DEFAULT NULL, "
-        "verdict_date TIMESTAMP DEFAULT NULL, "
-        "verdict_notes TEXT DEFAULT NULL, "
-        "UNIQUE(video_id, prediction_text))"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_date ON predictions(prediction_date)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_expert ON predictions(expert_name)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS experts_seen_today ("
-        "date TEXT NOT NULL, "
-        "expert_name TEXT NOT NULL, "
-        "seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-        "PRIMARY KEY (date, expert_name))"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_experts_date ON experts_seen_today(date)")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS video_summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            video_id TEXT NOT NULL UNIQUE,
-            expert_name TEXT NOT NULL,
-            channel_name TEXT,
-            summary_text TEXT NOT NULL,
-            video_title TEXT,
-            video_published_at TEXT,
-            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_date ON video_summaries(processed_at)")
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS task_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            video_url TEXT NOT NULL,
-            video_id TEXT,
-            video_title TEXT,
-            video_published_at TEXT,
-            channel_name TEXT,
-            channel_type TEXT DEFAULT 'media',
-            channel_owner TEXT DEFAULT '',
-            priority INTEGER DEFAULT 5,
-            status TEXT DEFAULT 'pending',
-            source TEXT DEFAULT 'auto',
-            attempts INTEGER DEFAULT 0,
-            error_message TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            started_at TIMESTAMP,
-            finished_at TIMESTAMP,
-            next_retry_at TIMESTAMP
-        )
-    """)
-
-    try:
-        conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE task_queue ADD COLUMN video_published_at TEXT")
-        print("🔄 Миграция: добавлена колонка video_published_at")
-
-    try:
-        conn.execute("SELECT next_retry_at FROM task_queue LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
-        print("🔄 Миграция: добавлена колонка next_retry_at")
-
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_status ON task_queue(status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority DESC, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_video_id ON task_queue(video_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_next_retry ON task_queue(next_retry_at)")
-
-    n_reset = conn.execute(
-        "UPDATE task_queue SET status = 'pending', started_at = NULL, next_retry_at = NULL "
-        "WHERE status = 'processing'"
-    ).rowcount
-    if n_reset:
-        print(f"🔄 Сброшено зависших processing → pending: {n_reset}")
-
-    n_max = conn.execute(
-        "UPDATE task_queue SET status = 'error', "
-        "error_message = 'max_attempts_exceeded', "
-        "finished_at = CURRENT_TIMESTAMP, "
-        "next_retry_at = NULL "
-        "WHERE status = 'pending' AND attempts >= ?",
-        (MAX_TASK_ATTEMPTS,)
-    ).rowcount
-    if n_max:
-        print(f"🛑 Помечено error (max attempts {MAX_TASK_ATTEMPTS}): {n_max}")
-
-    conn.commit()
-    conn.close()
-
-
-def _save_summary(video_id, expert_name, channel_name, summary_text,
-                  video_title="", video_published_at=""):
-    if not video_id or not summary_text:
-        return False
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute(
-            "INSERT OR REPLACE INTO video_summaries "
-            "(video_id, expert_name, channel_name, summary_text, "
-            " video_title, video_published_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (video_id, expert_name, channel_name, summary_text,
-             video_title, video_published_at)
-        )
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"⚠️  _save_summary: {e}")
-        return False
-    finally:
-        conn.close()
-
-
-def _is_video_processed(video_id: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT 1 FROM processed_videos WHERE video_id = ?", (video_id,)).fetchone()
-    conn.close()
-    return row is not None
-
-
-def _mark_video_processed(video_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT OR IGNORE INTO processed_videos (video_id) VALUES (?)", (video_id,))
-    conn.commit()
-    conn.close()
-
-
-def _get_today_msk() -> str:
-    now_msk = datetime.now(timezone.utc) + timedelta(hours=DISPLAY_TIMEZONE_OFFSET)
-    return now_msk.strftime("%Y-%m-%d")
-
-
-def _get_experts_seen_today() -> set:
-    today = _get_today_msk()
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT expert_name FROM experts_seen_today WHERE date = ?", (today,)).fetchall()
-    conn.close()
-    return {r[0] for r in rows}
-
-
-def _mark_expert_seen_today(expert_name: str):
-    if not expert_name or expert_name == "Неизвестный эксперт":
-        return
-    today = _get_today_msk()
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO experts_seen_today (date, expert_name) VALUES (?, ?)",
-            (today, expert_name)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _cleanup_old_experts(days_keep: int = 30):
-    cutoff = (datetime.now(timezone.utc) + timedelta(hours=DISPLAY_TIMEZONE_OFFSET) - timedelta(days=days_keep)).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM experts_seen_today WHERE date < ?", (cutoff,))
-    conn.commit()
-    conn.close()
-
-
-def get_expert_priority_rating(expert_name: str) -> float:
-    if not expert_name or expert_name == "Неизвестный эксперт":
-        return 50.0
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute(
-        "SELECT verdict FROM predictions WHERE expert_name = ? AND verdict IN ('confirmed','refuted')",
-        (expert_name,)
-    ).fetchall()
-    conn.close()
-    if not rows:
-        return 50.0
-    return round(sum(1 for r in rows if r[0] == "confirmed") / len(rows) * 100, 1)
-
-
-def _save_predictions(video_id, expert_name, channel_name, predictions_list):
-    if not predictions_list:
-        return 0
-    conn = sqlite3.connect(DB_PATH)
-    saved = 0
-    for p in predictions_list:
-        try:
-            conn.execute(
-                "INSERT OR IGNORE INTO predictions "
-                "(video_id, expert_name, channel_name, prediction_text) VALUES (?, ?, ?, ?)",
-                (video_id, expert_name, channel_name, p)
-            )
-            saved += 1
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
-    return saved
-
-
-def _add_task_to_queue(video_url, video_id="", video_title="", video_published_at="",
-                       channel_name="", channel_type="media", channel_owner="",
-                       priority=5, source="auto"):
-    conn = sqlite3.connect(DB_PATH)
-    if video_id:
-        row = conn.execute(
-            "SELECT id FROM task_queue WHERE video_id = ? AND status IN ('pending','processing')",
-            (video_id,)
-        ).fetchone()
-        if row:
-            conn.close()
-            return None
-        if _is_video_processed(video_id):
-            conn.close()
-            return None
-    else:
-        row = conn.execute(
-            "SELECT id FROM task_queue WHERE video_url = ? AND status IN ('pending','processing')",
-            (video_url,)
-        ).fetchone()
-        if row:
-            conn.close()
-            return None
-    cur = conn.execute("""
-        INSERT INTO task_queue
-            (video_url, video_id, video_title, video_published_at, channel_name,
-             channel_type, channel_owner, priority, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (video_url, video_id, video_title, video_published_at, channel_name,
-          channel_type, channel_owner, priority, source))
-    tid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return tid
-
-
-def _get_next_pending_task():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT * FROM task_queue WHERE status = 'pending' "
-        "AND attempts < ? "
-        "AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) "
-        "ORDER BY priority DESC, created_at ASC LIMIT 1",
-        (MAX_TASK_ATTEMPTS,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def _mark_task_processing(task_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "UPDATE task_queue SET status = 'processing', started_at = CURRENT_TIMESTAMP, "
-        "next_retry_at = NULL, "
-        "attempts = attempts + 1 WHERE id = ?", (task_id,)
-    )
-    conn.commit()
-    conn.close()
-
-
-def _mark_task_done(task_id, error_message=""):
-    conn = sqlite3.connect(DB_PATH)
-    if error_message:
-        conn.execute(
-            "UPDATE task_queue SET status = 'error', finished_at = CURRENT_TIMESTAMP, "
-            "next_retry_at = NULL, "
-            "error_message = ? WHERE id = ?", (error_message[:2000], task_id)
-        )
-    else:
-        conn.execute(
-            "UPDATE task_queue SET status = 'done', finished_at = CURRENT_TIMESTAMP, "
-            "next_retry_at = NULL WHERE id = ?",
-            (task_id,)
-        )
-    conn.commit()
-    conn.close()
-
-
-def _mark_task_retry(task_id, error_message):
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute(
-        "SELECT attempts FROM task_queue WHERE id = ?", (task_id,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        return
-    attempts = row[0] or 0
-    delay_minutes = min(2 ** attempts, 60)
-    conn.execute(
-        "UPDATE task_queue SET status = 'pending', "
-        "error_message = ?, "
-        "next_retry_at = datetime('now', ?), "
-        "started_at = NULL, "
-        "finished_at = NULL "
-        "WHERE id = ?",
-        (error_message[:2000], f"+{delay_minutes} minutes", task_id)
-    )
-    conn.commit()
-    conn.close()
-    print(f"   ⏸  #{task_id} → retry через {delay_minutes} мин "
-          f"(attempts={attempts}, err={error_message[:80]})")
-
-
-def _handle_task_failure(task_id, reason, attempts_now):
-    err_class = _classify_error(reason)
-    if err_class != "fatal" and attempts_now < MAX_TASK_ATTEMPTS:
-        _mark_task_retry(task_id, reason)
-    else:
-        _mark_task_done(task_id, error_message=reason)
-        print(f"   ⚠️  #{task_id} → error "
-              f"(class={err_class}, attempts={attempts_now}/{MAX_TASK_ATTEMPTS}): "
-              f"{reason[:120]}")
-
-
-def _cancel_task(task_id):
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT status FROM task_queue WHERE id = ?", (task_id,)).fetchone()
-    if not row:
-        conn.close()
-        return False, "не найдена"
-    if row[0] in ('done', 'error'):
-        conn.close()
-        return False, f"уже {row[0]}"
-    conn.execute(
-        "UPDATE task_queue SET status = 'error', finished_at = CURRENT_TIMESTAMP, "
-        "next_retry_at = NULL, "
-        "error_message = 'cancelled' WHERE id = ?", (task_id,)
-    )
-    conn.commit()
-    conn.close()
-    return True, "отменена"
-
-
-def _reset_queue():
-    conn = sqlite3.connect(DB_PATH)
-    n = conn.execute(
-        "UPDATE task_queue SET status = 'error', finished_at = CURRENT_TIMESTAMP, "
-        "next_retry_at = NULL, "
-        "error_message = 'manually_reset' "
-        "WHERE status IN ('pending','processing')"
-    ).rowcount
-    conn.commit()
-    conn.close()
-    return n
-
-
-def _queue_stats():
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT status, COUNT(*) FROM task_queue GROUP BY status").fetchall()
-    conn.close()
-    return {r[0]: r[1] for r in rows}
-
-
-def _queue_list(limit=20):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM task_queue WHERE status IN ('pending','processing') "
-        "ORDER BY priority DESC, created_at ASC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def _recent_errors(limit=10):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, video_title, video_url, error_message, attempts, finished_at "
-        "FROM task_queue WHERE status = 'error' "
-        "ORDER BY finished_at DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def _recent_predictions(limit=30):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, expert_name, channel_name, prediction_text, "
-        "       prediction_date, verdict "
-        "FROM predictions "
-        "ORDER BY prediction_date DESC LIMIT ?", (limit,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def _cleanup_done_tasks(days_keep=3):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "DELETE FROM task_queue WHERE status IN ('done','error') "
-        "AND finished_at < datetime('now', ?)", (f'-{days_keep} days',)
-    )
-    conn.commit()
-    conn.close()
-
-
-# ╔══════════════════════════════════════════════════════════╗
 # ║  YOUTUBE: RSS-first + API fallback                       ║
 # ╚══════════════════════════════════════════════════════════╝
 
@@ -929,7 +375,7 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
     videos = _get_channel_videos_rss(channel_id)
     if videos:
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, videos)
-        _maybe_trim_caches()
+        _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
         return videos
 
     print(f"   🔄 RSS пуст → API fallback")
@@ -937,7 +383,7 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
     if not uploads_id:
         print(f"   ❌ API: uploads playlist не получен")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
-        _maybe_trim_caches()
+        _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
         return []
 
     try:
@@ -950,12 +396,12 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
     except HttpError as e:
         print(f"   ❌ playlistItems.list: {e}")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
-        _maybe_trim_caches()
+        _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
         return []
     except Exception as e:
         print(f"   ❌ playlistItems.list: {e}")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
-        _maybe_trim_caches()
+        _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
         return []
 
     videos = []
@@ -977,7 +423,7 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
         })
 
     _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, videos)
-    _maybe_trim_caches()
+    _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
     print(f"   📡 playlistItems (fallback): получено {len(videos)}")
     return videos
 
@@ -1042,7 +488,7 @@ def _get_video_durations(video_ids: list) -> dict:
         except Exception as e:
             print(f"   ⚠️  durations: {e}")
 
-    _maybe_trim_caches()
+    _maybe_trim_caches(_YOUTUBE_VIDEOS_CACHE, _YOUTUBE_DURATIONS_CACHE)
     return durations
 
 
