@@ -6,10 +6,6 @@ import sqlite3
 from config import DB_PATH, MAX_TASK_ATTEMPTS
 
 
-_YOUTUBE_VIDEOS_CACHE_MAX = 1000
-_YOUTUBE_DURATIONS_CACHE_MAX = 1000
-
-
 def _cleanup_temp_files():
     cwd = os.getcwd()
     try:
@@ -22,17 +18,6 @@ def _cleanup_temp_files():
                     pass
     except Exception:
         pass
-
-
-def _maybe_trim_caches(videos_cache: dict, durations_cache: dict):
-    if len(videos_cache) > _YOUTUBE_VIDEOS_CACHE_MAX:
-        keys = list(videos_cache.keys())[:len(videos_cache) // 2]
-        for k in keys:
-            videos_cache.pop(k, None)
-    if len(durations_cache) > _YOUTUBE_DURATIONS_CACHE_MAX:
-        keys = list(durations_cache.keys())[:len(durations_cache) // 2]
-        for k in keys:
-            durations_cache.pop(k, None)
 
 
 def _init_db():
@@ -85,6 +70,16 @@ def _init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_date ON video_summaries(processed_at)")
+
+    # ─── Кеш транскриптов ──────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transcripts_cache (
+            video_id TEXT PRIMARY KEY,
+            transcript TEXT NOT NULL,
+            cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_date ON transcripts_cache(cached_at)")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS task_queue (

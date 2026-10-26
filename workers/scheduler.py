@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from config import (
     CHANNELS_TO_WATCH, CHECK_INTERVAL_HOURS, HEARTBEAT_HOURS,
     MAX_VIDEOS_PER_CHANNEL_PER_CHECK, MAX_REPEAT_EXPERTS_PER_CYCLE,
-    OWNER_USER_ID, YOUTUBE_DAILY_QUOTA,
+    OWNER_USER_ID, TRANSCRIPTS_CACHE_DAYS, YOUTUBE_DAILY_QUOTA,
 )
 from db.queue import (
     _add_task_to_queue, _queue_stats, _cleanup_done_tasks,
@@ -18,6 +18,7 @@ from db.experts import (
     _get_experts_seen_today, _cleanup_old_experts,
 )
 from db.videos import _mark_video_processed
+from db.transcripts import cleanup_old_transcripts
 from services.expert_detection import (
     _extract_name_from_title, _extract_name_from_description,
     _finalize_name, _is_owner_name,
@@ -43,6 +44,7 @@ async def check_all_channels(shutdown_event=None):
     try:
         _cleanup_old_experts(days_keep=30)
         _cleanup_done_tasks(days_keep=3)
+        cleanup_old_transcripts(days_keep=TRANSCRIPTS_CACHE_DAYS)
     except Exception:
         pass
 

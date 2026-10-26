@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
 
 try:
     from dotenv import load_dotenv
@@ -28,7 +27,12 @@ OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
 
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+# Модель по умолчанию — llama-3.1-8b-instant (лимит 500K токенов/день).
+# openai/gpt-oss-120b имеет лимит только 200K токенов/день и быстро исчерпывается
+# при Map-Reduce суммаризации. Если нужен gpt-oss-120b — задайте GROQ_MODEL
+# в переменных окружения Bothost.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
 DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
@@ -111,6 +115,10 @@ GROQ_DELAY_BETWEEN_CHUNKS = 5
 GROQ_MAX_RETRIES = 5
 
 DISPLAY_TIMEZONE_OFFSET = 3
+
+# ─── Кеш транскриптов ─────────────────────────────────────
+# Сколько хранить транскрипты в БД (дней). После — удаляются.
+TRANSCRIPTS_CACHE_DAYS = int(os.getenv("TRANSCRIPTS_CACHE_DAYS", "7"))
 
 
 # ╔══════════════════════════════════════════════════════════╗

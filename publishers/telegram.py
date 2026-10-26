@@ -17,6 +17,7 @@ from config import (
 from db.experts import _mark_expert_seen_today
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
+from db.transcripts import get_cached_transcript, save_cached_transcript
 from services.expert_detection import detect_expert_name, generate_expert_bio
 from services.predictions_extraction import extract_predictions
 from services.summarization import (
@@ -37,6 +38,21 @@ def set_bot(bot_instance):
     """Вызывается из bot.py при старте."""
     global _bot
     _bot = bot_instance
+
+
+def _looks_truncated_title(title: str) -> bool:
+    """RSS отдаёт обрезанные заголовки. Признаки: пусто, коротко, конец на пунктуации."""
+    if not title:
+        return True
+    if len(title) < 10:
+        return True
+    stripped = title.rstrip()
+    if stripped.endswith(("/", "-", "—", "|", ":", ",")):
+        return True
+    # Если в заголовке нет ни одной буквы (только эмодзи/пунктуация) — тоже
+    if not re.search(r'[А-Яа-яA-Za-z]', title):
+        return True
+    return False
 
 
 async def send_expert_post(video_url, video_title, expert_name, expert_bio,
@@ -132,18 +148,32 @@ async def process_and_publish(video_url, video_title="", video_description="",
     try:
         duration = video_duration
         published_at = video_published_at
+        vid = _extract_video_id(video_url)
 
-        if not video_title:
-            print("🔍 yt-dlp...")
+        # === ФОЛБЭК НА YT-DLP ДЛЯ ПОЛНОГО ЗАГОЛОВКА ===
+        # RSS отдаёт обрезанные заголовки (заканчиваются на «/», «-», «—»).
+        # Если заголовок подозрительный — запрашиваем полный через yt-dlp.
+        need_info = (
+            not video_title
+            or _looks_truncated_title(video_title)
+            or (not video_description and not channel_name)
+        )
+        if need_info:
+            print("🔍 yt-dlp (полный заголовок/метаданные)...")
             info = await asyncio.to_thread(get_video_info_ytdlp, video_url)
-            video_title = info.get("title", "")
-            video_description = info.get("description", "")
-            duration = info.get("duration", 0)
+            full_title = info.get("title", "")
+            if full_title and len(full_title) > len(video_title or ""):
+                print(f"  RSS:  {video_title[:70]!r}")
+                print(f"  yt-dlp: {full_title[:70]!r}")
+                video_title = full_title
+            if not video_description:
+                video_description = info.get("description", "")
+            if not duration:
+                duration = info.get("duration", 0)
             if not published_at:
                 published_at = info.get("published_at", "")
             if not channel_name:
                 channel_name = info.get("channel", "")
-            print(f"  Длительность: {_format_duration(duration)}\n")
 
             if not skip_duration_check and duration > 0:
                 if duration < MIN_VIDEO_DURATION_SECONDS:
@@ -156,13 +186,29 @@ async def process_and_publish(video_url, video_title="", video_description="",
             extra = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             published_at = extra.get("published_at", "")
 
-        print("📥 Шаг 1/4: Скачивание...")
-        audio_file = await asyncio.to_thread(download_audio, video_url)
-        print("✅ Скачано\n")
+        # === КЕШ ТРАНСКРИПТОВ ===
+        # Если транскрипт уже был получен в прошлой попытке (например,
+        # задача упала на 429 после транскрибации) — берём из кеша
+        # и пропускаем скачивание + транскрибацию.
+        transcript = ""
+        if vid:
+            transcript = get_cached_transcript(vid)
+            if transcript:
+                print(f"💾 транскрипт из кеша ({len(transcript)} символов) — пропускаю скачивание")
 
-        print("🎤 Шаг 2/4: Транскрибация...")
-        transcript = await asyncio.to_thread(transcribe_audio, audio_file, duration)
-        audio_file = None
+        if not transcript:
+            print("📥 Шаг 1/4: Скачивание...")
+            audio_file = await asyncio.to_thread(download_audio, video_url)
+            print("✅ Скачано\n")
+
+            print("🎤 Шаг 2/4: Транскрибация...")
+            transcript = await asyncio.to_thread(transcribe_audio, audio_file, duration)
+            audio_file = None
+
+            # Сохраняем транскрипт в кеш сразу после получения
+            if vid and transcript:
+                save_cached_transcript(vid, transcript)
+                print(f"💾 транскрипт сохранён в кеш ({len(transcript)} символов)")
 
         transcript_len = len(transcript.strip())
         print(f"📊 Длина транскрипта: {transcript_len}")
@@ -214,7 +260,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         )
         print("✅ Опубликовано\n")
 
-        vid = _extract_video_id(video_url)
         _save_summary(vid, expert_name, channel_name, summary,
                       video_title=display_title, video_published_at=published_at)
         _mark_expert_seen_today(expert_name)
