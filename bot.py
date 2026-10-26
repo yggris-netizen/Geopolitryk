@@ -21,6 +21,7 @@ import traceback
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import (
     BOT_TOKEN, CHANNEL_ID, DB_PATH, GROQ_API_KEY, GROQ_MODEL,
@@ -41,9 +42,10 @@ from db.summaries import _save_summary  # noqa: F401 (для CLI совмест�
 from db.predictions import _recent_predictions  # noqa: F401
 from services.youtube import get_video_info_ytdlp
 
-from handlers import admin_router, links_router
+from handlers import admin_router, links_router, predictions_router
 from handlers.admin import set_owner_user_id as set_admin_owner
 from handlers.links import set_owner_user_id as set_links_owner
+from handlers.predictions import set_owner_user_id as set_preds_owner
 from publishers.telegram import process_and_publish, set_bot
 from workers.task_worker import _worker_loop
 from workers.scheduler import check_all_channels, build_scheduler
@@ -106,14 +108,14 @@ if HEARTBEAT_HOURS > 0:
     print(f"   Heartbeat:        каждые {HEARTBEAT_HOURS} ч")
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
-dp.include_routers(admin_router, links_router)
+dp = Dispatcher(storage=MemoryStorage())
+dp.include_routers(admin_router, predictions_router, links_router)
 
 set_admin_owner(OWNER_USER_ID)
 set_links_owner(OWNER_USER_ID)
+set_preds_owner(OWNER_USER_ID)
 set_bot(bot)
 print()
-
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║                       ЗАПУСК                             ║
