@@ -1,7 +1,6 @@
 """CRUD прогнозов через Telegram: просмотр, редактирование, вердикты, удаление."""
 
 import html
-from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -136,7 +135,7 @@ async def _render_list(message_or_cb, page=0, expert=None, verdict=None):
     lines = [f"<b>🔮 Прогнозы ({total} всего, стр. {page+1}):</b>\n"]
     for p in rows:
         lines.append(_format_prediction_short(p))
-        lines.append("")  # пустая строка между прогнозами
+        lines.append("")
     text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:4000] + "…"

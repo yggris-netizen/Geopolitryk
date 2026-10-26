@@ -1,6 +1,7 @@
 """Административные команды владельца."""
 
 import html
+import os
 import sqlite3
 
 from aiogram import Router
@@ -47,7 +48,6 @@ def _ram_suffix() -> str:
     if not PSUTIL_AVAILABLE:
         return ""
     try:
-        import os
         mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
         return f"\n💾 RAM: {mem_mb:.0f} MB"
     except Exception:
@@ -72,7 +72,8 @@ async def cmd_help(message: Message):
         "/reset — сброс очереди\n"
         "/cancel &lt;id&gt; — отмена\n"
         "/priority — рейтинг\n"
-        "/experts_today — кто выступал"
+        "/experts_today — кто выступал\n"
+        "/cleanup_junk_predictions — удалить пустышки"
     )
 
 
@@ -156,20 +157,25 @@ async def cmd_errors(message: Message):
 async def cmd_predictions(message: Message):
     if not _is_owner(message):
         return
-    preds = _recent_predictions(15)
-    if not preds:
-        await message.answer("📭 Прогнозов пока нет")
-        return
-    lines = ["<b>🔮 Последние прогнозы:</b>\n"]
-    for p in preds:
-        icon = {"confirmed": "✅", "refuted": "❌",
-                "unverifiable": "❔"}.get(p.get("verdict"), "⏳")
-        lines.append(f"{icon} <b>#{p['id']}</b> — {p['expert_name']}\n"
-                     f"  {(p['prediction_text'] or '')[:200]}\n")
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000] + "…"
-    await message.answer(text)
+    # Делегируем в handlers/predictions.py, если он подключён
+    try:
+        from handlers.predictions import cmd_predictions as _pred_list
+        await _pred_list(message)
+    except ImportError:
+        preds = _recent_predictions(15)
+        if not preds:
+            await message.answer("📭 Прогнозов пока нет")
+            return
+        lines = ["<b>🔮 Последние прогнозы:</b>\n"]
+        for p in preds:
+            icon = {"confirmed": "✅", "refuted": "❌",
+                    "unverifiable": "❔"}.get(p.get("verdict"), "⏳")
+            lines.append(f"{icon} <b>#{p['id']}</b> — {p['expert_name']}\n"
+                         f"  {(p['prediction_text'] or '')[:200]}\n")
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:4000] + "…"
+        await message.answer(text)
 
 
 @router.message(Command("reset"))
@@ -238,3 +244,43 @@ async def cmd_experts_today(message: Message):
     for e in sorted(exp):
         lines.append(f"• {e} — {get_expert_priority_rating(e)}%")
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("cleanup_junk_predictions"))
+async def cmd_cleanup_junk(message: Message):
+    """Удаляет «пустые» прогнозы, созданные до ужесточения промпта."""
+    if not _is_owner(message):
+        return
+
+    junk_markers = (
+        "о котором говорится в интервью",
+        "событие, о котором",
+    )
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    all_rows = conn.execute(
+        "SELECT id, prediction_text FROM predictions"
+    ).fetchall()
+
+    to_delete = []
+    for r in all_rows:
+        text_low = (r["prediction_text"] or "").lower()
+        if any(m in text_low for m in junk_markers):
+            to_delete.append(r["id"])
+
+    if not to_delete:
+        conn.close()
+        await message.answer("✅ «Пустышек» не найдено")
+        return
+
+    placeholders = ",".join("?" * len(to_delete))
+    conn.execute(f"DELETE FROM predictions WHERE id IN ({placeholders})", to_delete)
+    conn.commit()
+    conn.close()
+
+    await message.answer(
+        f"🧹 Удалено «пустышек»: <b>{len(to_delete)}</b>\n"
+        f"ID: {', '.join(f'#{i}' for i in to_delete[:20])}"
+        + ("…" if len(to_delete) > 20 else "")
+    )
