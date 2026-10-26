@@ -1,3 +1,32 @@
+"""
+YouTube → Telegram бот: аналитические выжимки.
+Единая очередь + Telegram-управление + воркер.
+Глубина поиска: только 12 часов, без фолбэка.
+
+Версия БЕЗ новостных дайджестов (RSS).
+Сохраняет выжимки экспертов в video_summaries для будущего сравнения повестки.
+
+Версия 3 (post-run fixes):
+  - Разбивка длинных сообщений >4096 символов (Telegram limit)
+  - Очистка мусорных окончаний в именах (Сытникнуть → Сытник)
+  - Ужесточение промпта прогнозов (отсечение «событие, о котором говорится»)
+  - message is too long → fatal (после внедрения разбивки)
+
+Версия 2 (high-priority hardening):
+  - RSS-first discovery: playlistItems.list только fallback (экономия квоты YouTube)
+  - Exponential backoff для transient-ошибок (429, timeout, quota)
+  - Классификация ошибок: transient / fatal
+  - Колонка next_retry_at в task_queue
+  - DB_PATH читается из env (для Bothost: /app/data/seen_videos.db)
+
+Оптимизации RAM:
+  - WHISPER_MODE=groq (без локального Whisper)
+  - gc.collect() после каждой задачи
+  - Ограничение роста кэшей YouTube (1000 записей)
+  - Очистка audio.* при старте
+  - RAM в /stats и /heartbeat
+"""
+
 import asyncio
 import html
 import json
@@ -85,9 +114,24 @@ HEARTBEAT_HOURS = int(os.getenv("HEARTBEAT_HOURS", "0"))
 
 GROQ_MAX_SIZE_MB = 24.0
 
+TELEGRAM_MAX_LEN = 4096
+
 _creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if _creds_json:
-    _creds_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    _creds_json = _creds_json.strip()
+    if len(_creds_json) >= 2 and _creds_json[0] == '"' and _creds_json[-1] == '"':
+        _creds_json = _creds_json[1:-1]
+    _creds_json = _creds_json.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    try:
+        _parsed_creds = json.loads(_creds_json)
+        if not isinstance(_parsed_creds, dict) or "type" not in _parsed_creds:
+            raise ValueError("JSON не содержит поля 'type'")
+    except json.JSONDecodeError as _e:
+        print(f"❌ GOOGLE_CREDENTIALS_JSON невалиден: {_e}")
+        print(f"   Первые 80 символов: {_creds_json[:80]!r}")
+        sys.exit(1)
+    _creds_json = json.dumps(_parsed_creds, ensure_ascii=False)
+    _creds_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
     _creds_tmp.write(_creds_json)
     _creds_tmp.close()
     SERVICE_ACCOUNT_FILE = _creds_tmp.name
@@ -212,14 +256,14 @@ def _is_quota_error(e: Exception) -> bool:
 
 
 # ─── Классификация ошибок ──────────────────────────────────
-# Транзиентные: имеет смысл ретраить (временные сбои провайдера)
-# Фатальные: ретраить бессмысленно (видео не подходит по параметрам)
 
 _FATAL_ERROR_MARKERS = (
     "too_short:", "too_long:", "transcript_too_short:",
     "ffmpeg_split_failed", "chunk_too_big",
     "video unavailable", "private video", "deleted video",
     "http error 404", "http error 410",
+    "message is too long",
+    "chat not found", "bot was blocked",
 )
 
 _TRANSIENT_ERROR_MARKERS = (
@@ -233,7 +277,6 @@ _TRANSIENT_ERROR_MARKERS = (
 
 
 def _classify_error(reason: str) -> str:
-    """Возвращает 'transient', 'fatal' или 'unknown'."""
     if not reason:
         return "unknown"
     r = reason.lower()
@@ -434,7 +477,6 @@ def _init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_date ON video_summaries(processed_at)")
 
-    # task_queue: сразу с колонкой next_retry_at для новых установок
     conn.execute("""
         CREATE TABLE IF NOT EXISTS task_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -457,7 +499,6 @@ def _init_db():
         )
     """)
 
-    # Миграции для существующих БД
     try:
         conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
     except sqlite3.OperationalError:
@@ -641,7 +682,6 @@ def _add_task_to_queue(video_url, video_id="", video_title="", video_published_a
 
 
 def _get_next_pending_task():
-    """Возвращает следующую pending-задачу, у которой истёк backoff."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
@@ -685,7 +725,6 @@ def _mark_task_done(task_id, error_message=""):
 
 
 def _mark_task_retry(task_id, error_message):
-    """Оставляет задачу в pending с отложенным next_retry_at (backoff)."""
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
         "SELECT attempts FROM task_queue WHERE id = ?", (task_id,)
@@ -694,7 +733,6 @@ def _mark_task_retry(task_id, error_message):
         conn.close()
         return
     attempts = row[0] or 0
-    # Экспоненциальный backoff: 2, 4, 8, 16, 32, но не более 60 минут
     delay_minutes = min(2 ** attempts, 60)
     conn.execute(
         "UPDATE task_queue SET status = 'pending', "
@@ -712,7 +750,6 @@ def _mark_task_retry(task_id, error_message):
 
 
 def _handle_task_failure(task_id, reason, attempts_now):
-    """Единая точка обработки сбоя: transient → retry, иначе → error."""
     err_class = _classify_error(reason)
     if err_class != "fatal" and attempts_now < MAX_TASK_ATTEMPTS:
         _mark_task_retry(task_id, reason)
@@ -838,7 +875,6 @@ def _get_uploads_playlist_id(channel_id: str) -> str:
 
 
 def _get_channel_videos_rss(channel_id: str) -> list:
-    """RSS-feed YouTube. Не расходует квоту API."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
         resp = httpx.get(url, timeout=10.0)
@@ -881,10 +917,6 @@ def _get_channel_videos_rss(channel_id: str) -> list:
 
 
 def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
-    """
-    RSS-first: сначала RSS-фид (бесплатно, без квоты).
-    API playlistItems.list — только fallback, если RSS пуст/упал.
-    """
     now = time.time()
     cached = _YOUTUBE_VIDEOS_CACHE.get(channel_id)
     if cached:
@@ -893,7 +925,6 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
             print(f"   💾 кэш видео ({len(videos)} шт., {int(now - ts)}с назад)")
             return videos
 
-    # ── 1. RSS-first ─────────────────────────────────────
     print(f"   📡 RSS-first discovery")
     videos = _get_channel_videos_rss(channel_id)
     if videos:
@@ -901,7 +932,6 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
         _maybe_trim_caches()
         return videos
 
-    # ── 2. API fallback (если RSS пуст или упал) ─────────
     print(f"   🔄 RSS пуст → API fallback")
     uploads_id = _get_uploads_playlist_id(channel_id)
     if not uploads_id:
@@ -1286,7 +1316,19 @@ def _sanitize_expert_name(name: str) -> str:
     if len(words) >= 2 and all(w.isupper() for w in words):
         print(f"      🧹 всё CAPS в имени: «{name}»")
         return "Неизвестный эксперт"
-    return name
+
+    _BAD_SUFFIXES = ("нуть", "тся", "ться", "ешь", "ишь", "уть", "ать", "ять", "ить")
+    cleaned = []
+    for w in words:
+        for suf in _BAD_SUFFIXES:
+            if w.lower().endswith(suf) and len(w) > len(suf) + 3:
+                w_new = w[:-len(suf)]
+                if _looks_like_surname(w_new) or (MORPH_AVAILABLE and _MORPH.parse(w_new)):
+                    print(f"      🧹 убираю «{suf}»: {w} → {w_new}")
+                    w = w_new
+                    break
+        cleaned.append(w)
+    return " ".join(cleaned)
 
 
 def _to_nominative(name: str) -> str:
@@ -1691,12 +1733,31 @@ def extract_predictions(transcript, expert_name):
 
 СЕГОДНЯ: {today_str}. Текущий год: {current_year}.
 
-Прогноз: событие с датой/сроком, число, однозначное будущее.
-НЕ прогноз: рассуждения, оценки прошлого.
+ПРОГНОЗ — это КОНКРЕТНОЕ утверждение о БУДУЩЕМ, которое можно проверить:
+- Есть событие (что именно произойдёт)
+- Есть срок/дата (когда)
+- Есть проверяемый исход (да/нет, случилось/не случилось)
+
+НЕ ПРОГНОЗ:
+- Общие рассуждения («ситуация будет ухудшаться»)
+- Оценки прошлого
+- Формулировки без конкретики («произойдёт событие, о котором говорится»)
+- Прогнозы без срока
+
+ПЛОХИЕ примеры (НЕ включай):
+- «До 27 октября 2026 года произойдёт событие, о котором говорится в интервью»
+- «Ситуация изменится в ближайшее время»
+- «Эксперт считает, что всё будет плохо»
+
+ХОРОШИЕ примеры (включай):
+- «В ноябре 2026 года в Абу-Даби пройдут переговоры»
+- «Если война продлится 2 года, конфликт закончится до 2029 года»
+- «Трамп подпишет указ до конца декабря 2026 года»
 
 ВАЖНО:
-- Не используй годы РАНЬШЕ {current_year}.
-- Горизонт > {MAX_PREDICTION_HORIZON_YEARS} лет — не включай.
+- Не используй годы РАНЬШЕ {current_year}
+- Горизонт > {MAX_PREDICTION_HORIZON_YEARS} лет — не включай
+- Максимум {MAX_PREDICTIONS_PER_VIDEO} прогнозов
 
 JSON-массив строк:
 ["прогноз 1", "прогноз 2"]
@@ -1734,6 +1795,8 @@ JSON:"""
                 continue
             p = p.strip().strip('"').strip("'").strip("•").strip("-").strip()
             if not (15 <= len(p) <= 400):
+                continue
+            if "о котором говорится в интервью" in p.lower():
                 continue
             years_in_pred = re.findall(r'\b(20\d{2})\b', p)
             if any(int(y) < current_year for y in years_in_pred):
@@ -1972,8 +2035,42 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
     if hashtags:
         text += f"\n{hashtags}\n"
     text += f"\n<i>Сгенерировано автоматически.</i>"
-    await bot.send_message(chat_id=CHANNEL_ID, text=text)
-    print("✅ Выжимка")
+
+    if len(text) <= TELEGRAM_MAX_LEN:
+        await bot.send_message(chat_id=CHANNEL_ID, text=text)
+        print("✅ Выжимка")
+    else:
+        print(f"✂️  Текст {len(text)} > {TELEGRAM_MAX_LEN}, разбиваю...")
+        parts = []
+        current = ""
+        for paragraph in text.split("\n\n"):
+            if len(current) + len(paragraph) + 2 <= TELEGRAM_MAX_LEN:
+                current = (current + "\n\n" + paragraph).strip() if current else paragraph
+            else:
+                if current:
+                    parts.append(current)
+                if len(paragraph) > TELEGRAM_MAX_LEN:
+                    sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                    buf = ""
+                    for s in sentences:
+                        if len(buf) + len(s) + 1 <= TELEGRAM_MAX_LEN:
+                            buf = (buf + " " + s).strip() if buf else s
+                        else:
+                            if buf:
+                                parts.append(buf)
+                            buf = s[:TELEGRAM_MAX_LEN]
+                    if buf:
+                        parts.append(buf)
+                else:
+                    current = paragraph
+        if current:
+            parts.append(current)
+
+        for i, part in enumerate(parts, 1):
+            header = f"<i>(часть {i}/{len(parts)})</i>\n\n" if len(parts) > 1 else ""
+            await bot.send_message(chat_id=CHANNEL_ID, text=header + part)
+            print(f"✅ Выжимка {i}/{len(parts)}")
+            await asyncio.sleep(1)
 
 
 async def process_and_publish(video_url, video_title="", video_description="",
