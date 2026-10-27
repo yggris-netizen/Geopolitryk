@@ -1,12 +1,11 @@
-aiogram>=3.0
+aiogram>=3.13
 httpx
-yt-dlp
+yt-dlp[default]>=2025.05.22
+bgutil-ytdlp-pot-provider
 groq
-google-auth
 google-api-python-client
+google-auth
 apscheduler
-ddgs
 pymorphy3
-psutil
-pytz
 python-dotenv
+psutil
