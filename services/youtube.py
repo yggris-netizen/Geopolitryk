@@ -341,7 +341,15 @@ def get_new_videos_from_channel(channel_id: str) -> list:
 
 def get_video_info_ytdlp(url: str) -> dict:
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True}) as ydl:
+        with yt_dlp.YoutubeDL({
+            'quiet': True,
+            'skip_download': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['mweb', 'tv', 'web_safari'],
+                }
+            },
+        }) as ydl:
             info = ydl.extract_info(url, download=False)
             upload_date = info.get("upload_date", "")
             published_at = ""
