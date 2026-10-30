@@ -32,7 +32,7 @@ GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 # openai/gpt-oss-120b имеет лимит только 200K токенов/день и быстро исчерпывается
 # при Map-Reduce суммаризации. Если нужен gpt-oss-120b — задайте GROQ_MODEL
 # в переменных окружения Bothost.
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
 DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
