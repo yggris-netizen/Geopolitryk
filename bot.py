@@ -1,14 +1,6 @@
 """
 YouTube → Telegram бот: аналитические выжимки.
 Точка входа: инициализация, роутеры, воркер, планировщик.
-
-После Этапа 3 декомпозиции:
-  - handlers/     — Telegram-команды и обработка ссылок
-  - workers/      — фоновый воркер и планировщик
-  - publishers/   — публикация в канал
-  - services/     — YouTube, транскрибация, эксперты, суммаризация, прогнозы
-  - db/           — SQLite
-  - config.py     — константы и env
 """
 
 import asyncio
@@ -38,8 +30,6 @@ from db.connection import _init_db, _cleanup_temp_files
 from db.queue import (
     _queue_list, _recent_errors, _cancel_task, _reset_queue,
 )
-from db.summaries import _save_summary  # noqa: F401 (для CLI совместимости)
-from db.predictions import _recent_predictions  # noqa: F401
 from services.youtube import get_video_info_ytdlp
 
 from handlers import admin_router, links_router, predictions_router
@@ -53,10 +43,6 @@ from workers.scheduler import check_all_channels, build_scheduler
 
 _SHUTDOWN_EVENT = None
 
-
-# ╔══════════════════════════════════════════════════════════╗
-# ║              ИНИЦИАЛИЗАЦИЯ                               ║
-# ╚══════════════════════════════════════════════════════════╝
 
 print("=" * 60)
 print("ЗАПУСК БОТА")
@@ -117,9 +103,6 @@ set_preds_owner(OWNER_USER_ID)
 set_bot(bot)
 print()
 
-# ╔══════════════════════════════════════════════════════════╗
-# ║                       ЗАПУСК                             ║
-# ╚══════════════════════════════════════════════════════════╝
 
 async def _main():
     global _SHUTDOWN_EVENT
@@ -238,14 +221,31 @@ async def _main():
             print("python bot.py --process <url>")
             return
         info = get_video_info_ytdlp(url)
+        proc_channel_name = info.get("channel", "") or ""
+        proc_channel_type = "media"
+        proc_channel_owner = ""
+        cn_low = proc_channel_name.lower().strip()
+        for ch in CHANNELS_TO_WATCH:
+            ch_low = ch["name"].lower().strip()
+            ch_owner_low = (ch.get("owner", "") or "").lower().strip()
+            if (cn_low == ch_low
+                    or cn_low in ch_low
+                    or ch_low in cn_low
+                    or (ch_owner_low and cn_low == ch_owner_low)):
+                proc_channel_name = ch["name"]
+                proc_channel_type = ch.get("type", "media")
+                proc_channel_owner = ch.get("owner", "")
+                break
+        print(f"  Канал (--process): {proc_channel_name} [{proc_channel_type}]")
         ok, reason = await process_and_publish(
             url,
             video_title=info.get("title", ""),
             video_description=info.get("description", ""),
             video_duration=info.get("duration", 0),
             video_published_at=info.get("published_at", ""),
-            channel_name=info.get("channel", ""),
-            channel_type="media",
+            channel_name=proc_channel_name,
+            channel_type=proc_channel_type,
+            channel_owner=proc_channel_owner,
             skip_duration_check=True,
         )
         print(f"\n{'=' * 60}")
