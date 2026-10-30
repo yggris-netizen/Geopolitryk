@@ -1,7 +1,6 @@
 """Публикация выжимки в Telegram-канал + пайплайн обработки видео."""
 
 import asyncio
-import html
 import os
 import re
 import sys
@@ -41,24 +40,8 @@ def set_bot(bot_instance):
     _bot = bot_instance
 
 
-# ─── HTML sanitization ───────────────────────────────────
-
-_ALLOWED_TAGS = ("b", "i")
-
-
-def _sanitize_summary_html(text: str) -> str:
-    """Пропускает только <b>, </b>, <i>, </i>. Всё остальное экранирует."""
-    if not text:
-        return ""
-    text = text.replace("&", "&amp;")
-    text = text.replace("<", "&lt;").replace(">", "&gt;")
-    for tag in _ALLOWED_TAGS:
-        text = text.replace(f"&lt;{tag}&gt;", f"<{tag}>")
-        text = text.replace(f"&lt;/{tag}&gt;", f"</{tag}>")
-    return text
-
-
 def _looks_truncated_title(title: str) -> bool:
+    """RSS отдаёт обрезанные заголовки. Признаки: пусто, коротко, конец на пунктуации."""
     if not title:
         return True
     if len(title) < 10:
@@ -76,19 +59,15 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
     video_id = _extract_video_id(video_url)
     date_str = _format_published_date(published_at)
 
-    safe_expert = html.escape(expert_name or "")
-    safe_bio = html.escape(expert_bio or "")
-    safe_channel = html.escape(channel_name or "")
-
     parts = []
     if video_title:
         parts.append(_format_title(video_title))
-    el = f"<b>ЭКСПЕРТ</b>\n{safe_expert}"
+    el = f"<b>ЭКСПЕРТ</b>\n{expert_name}"
     if expert_bio:
-        el += f" — {safe_bio}"
+        el += f" — {expert_bio}"
     parts.append(el)
-    if channel_name and channel_name.strip().lower() != (expert_name or "").strip().lower():
-        parts.append(f"<b>КАНАЛ</b>\n{safe_channel}")
+    if channel_name and channel_name.strip().lower() != expert_name.strip().lower():
+        parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
     if date_str:
         parts.append(f"<b>ОПУБЛИКОВАНО</b>\n{date_str}")
     parts.append("<i>Выжимка ниже ↓</i>")
@@ -110,10 +89,9 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
         await _bot.send_message(chat_id=CHANNEL_ID, text=caption)
 
     hashtags = generate_hashtags(expert_name, summary) if GENERATE_HASHTAGS else ""
-    safe_summary = _sanitize_summary_html(summary)
-    text = f"{safe_summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
+    text = f"{summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
     if hashtags:
-        text += f"\n{html.escape(hashtags)}\n"
+        text += f"\n{hashtags}\n"
     text += f"\n<i>Сгенерировано автоматически.</i>"
 
     if len(text) <= TELEGRAM_MAX_LEN:
@@ -171,6 +149,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
         published_at = video_published_at
         vid = _extract_video_id(video_url)
 
+        # === ФОЛБЭК НА YT-DLP ДЛЯ ПОЛНОГО ЗАГОЛОВКА ===
         need_info = (
             not video_title
             or _looks_truncated_title(video_title)
@@ -280,6 +259,11 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         if EXTRACT_PREDICTIONS:
             try:
+                # Пауза 35 секунд: Groq free tier — 8000 TPM (tokens per minute).
+                # Map-Reduce суммаризация уже съела ~7900 TPM.
+                # Пауза даёт TPM восстановиться, иначе 429 rate_limit_exceeded.
+                print("⏸  пауза 35с перед прогнозами (восстановление TPM Groq)...")
+                await asyncio.sleep(35)
                 print("📊 Прогнозы...")
                 preds = extract_predictions(transcript, expert_name)
                 if preds:

@@ -7,6 +7,7 @@
 import json
 import os
 import sys
+import tempfile
 
 try:
     from dotenv import load_dotenv
@@ -27,9 +28,10 @@ OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 
-# Модель по умолчанию — openai/gpt-oss-20b (баланс цена/качество).
-# llama-3.1-8b-instant имеет больший дневной лимит, но хуже держит структуру
-# (заголовки, JSON-массивы в извлечении прогнозов). Меняется через env GROQ_MODEL.
+# Модель по умолчанию — openai/gpt-oss-20b (бесплатный тир).
+# Лимит: 8000 TPM (tokens per minute). Поэтому нужны паузы между запросами
+# (GROQ_DELAY_BETWEEN_CHUNKS=15 и пауза 35с перед прогнозами).
+# Если нужен gpt-oss-120b (10000 TPM) — задайте GROQ_MODEL в env Bothost.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
@@ -43,12 +45,6 @@ TELEGRAM_MAX_LEN = 4096
 
 
 # ─── Google Service Account ────────────────────────────────
-# Предпочтительный путь — GOOGLE_CREDENTIALS_JSON (dict передаётся напрямую
-# в service_account.Credentials.from_service_account_info, без temp-файла).
-# Fallback — SERVICE_ACCOUNT_FILE (путь к .json на диске).
-GOOGLE_CREDENTIALS = None
-SERVICE_ACCOUNT_FILE = None
-
 _creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if _creds_json:
     _creds_json = _creds_json.strip()
@@ -56,14 +52,18 @@ if _creds_json:
         _creds_json = _creds_json[1:-1]
     _creds_json = _creds_json.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     try:
-        _parsed = json.loads(_creds_json)
-        if not isinstance(_parsed, dict) or "type" not in _parsed:
+        _parsed_creds = json.loads(_creds_json)
+        if not isinstance(_parsed_creds, dict) or "type" not in _parsed_creds:
             raise ValueError("JSON не содержит поля 'type'")
-        GOOGLE_CREDENTIALS = _parsed
     except json.JSONDecodeError as _e:
         print(f"❌ GOOGLE_CREDENTIALS_JSON невалиден: {_e}")
         print(f"   Первые 80 символов: {_creds_json[:80]!r}")
         sys.exit(1)
+    _creds_json = json.dumps(_parsed_creds, ensure_ascii=False)
+    _creds_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+    _creds_tmp.write(_creds_json)
+    _creds_tmp.close()
+    SERVICE_ACCOUNT_FILE = _creds_tmp.name
 else:
     SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
 
@@ -111,7 +111,10 @@ EXTRACT_PREDICTIONS = True
 MAX_PREDICTIONS_PER_VIDEO = 10
 MAX_PREDICTION_HORIZON_YEARS = 5
 
-GROQ_DELAY_BETWEEN_CHUNKS = 5
+# Пауза между чанками Map-Reduce (секунды).
+# 15 секунд — для бесплатного тира Groq (8000 TPM на openai/gpt-oss-20b).
+# Было 5 секунд, но тогда 2-3 чанка съедали TPM и на прогнозы не хватало.
+GROQ_DELAY_BETWEEN_CHUNKS = 15
 GROQ_MAX_RETRIES = 5
 
 DISPLAY_TIMEZONE_OFFSET = 3
@@ -130,7 +133,7 @@ _FATAL_ERROR_MARKERS = (
     "video unavailable", "private video", "deleted video",
     "http error 404", "http error 410",
     "message is too long",
-    "bot was blocked",
+    "chat not found", "bot was blocked",
 )
 
 _TRANSIENT_ERROR_MARKERS = (
@@ -140,7 +143,6 @@ _TRANSIENT_ERROR_MARKERS = (
     "service unavailable", "bad gateway",
     " 500", " 502", " 503", " 504",
     "internal server error",
-    "chat not found",
 )
 
 
