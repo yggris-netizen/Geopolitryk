@@ -443,9 +443,17 @@ def detect_expert_name(video_title, transcript, description="",
             return name
     print("      ⚠️  нет")
 
+    # Шаг 5: fallback на владельца для personal
     if channel_type == "personal" and channel_owner:
         on = _finalize_name(channel_owner)
-        print(f"   Шаг 5: fallback владельца: {on}")
+        print(f"   Шаг 5: fallback владельца (personal): {on}")
+        return on
+
+    # Шаг 6: fallback на владельца для author
+    # Если на авторском канале гость не назван — эксперт = владелец канала
+    if channel_type == "author" and channel_owner:
+        on = _finalize_name(channel_owner)
+        print(f"   Шаг 6: fallback владельца (author): {on}")
         return on
 
     print("   ⚠️  не определено")
