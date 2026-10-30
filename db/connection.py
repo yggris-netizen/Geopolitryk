@@ -20,6 +20,11 @@ def _cleanup_temp_files():
         pass
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r[1] == column for r in rows)
+
+
 def _init_db():
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir:
@@ -28,7 +33,17 @@ def _init_db():
         except Exception:
             pass
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+
+    # WAL позволяет читать во время записи (воркер + планировщик + Telegram-хендлеры)
+    # и снижает вероятность "database is locked". PRAGMA сохраняется между запусками.
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+    except Exception as e:
+        print(f"⚠️  PRAGMA WAL: {e}")
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS processed_videos ("
         "video_id TEXT PRIMARY KEY, "
@@ -103,15 +118,11 @@ def _init_db():
         )
     """)
 
-    try:
-        conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
-    except sqlite3.OperationalError:
+    if not _column_exists(conn, "task_queue", "video_published_at"):
         conn.execute("ALTER TABLE task_queue ADD COLUMN video_published_at TEXT")
         print("🔄 Миграция: добавлена колонка video_published_at")
 
-    try:
-        conn.execute("SELECT next_retry_at FROM task_queue LIMIT 1")
-    except sqlite3.OperationalError:
+    if not _column_exists(conn, "task_queue", "next_retry_at"):
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
         print("🔄 Миграция: добавлена колонка next_retry_at")
 

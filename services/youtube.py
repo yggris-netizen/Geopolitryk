@@ -20,6 +20,8 @@ from config import (
 from services.youtube_api import youtube
 from db.videos import _is_video_processed
 
+# Условный путь к cookies: локально — относительный, на Bothost — /app/data/
+COOKIEFILE = "/app/data/cookies.txt" if os.path.exists("/app/data/cookies.txt") else "cookies.txt"
 
 # ─── Кэши (в памяти) ───────────────────────────────────────
 
@@ -96,9 +98,6 @@ def _get_uploads_playlist_id(channel_id: str) -> str:
 
 def _get_channel_videos_rss(channel_id: str) -> list:
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    # Таймаут увеличен до 30 секунд: RSS-фиды YouTube иногда отвечают медленно
-    # (было 10 секунд — иногда не хватало, отсюда "handshake timed out").
-    # Одна попытка + fallback на API.
     try:
         resp = httpx.get(url, timeout=30.0)
         resp.raise_for_status()
@@ -350,7 +349,7 @@ def get_video_info_ytdlp(url: str) -> dict:
         with yt_dlp.YoutubeDL({
             'quiet': True,
             'skip_download': True,
-            'cookiefile': 'cookies.txt',
+            'cookiefile': COOKIEFILE,
         }) as ydl:
             info = ydl.extract_info(url, download=False)
             upload_date = info.get("upload_date", "")

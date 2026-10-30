@@ -11,6 +11,9 @@ from config import (
 )
 from services.llm import groq_client
 
+# Условный путь к cookies: локально — относительный, на Bothost — /app/data/
+COOKIEFILE = "/app/data/cookies.txt" if os.path.exists("/app/data/cookies.txt") else "cookies.txt"
+
 _local_model = None
 if WHISPER_MODE == "local":
     print(f"\nЗагружаю локальный Whisper '{WHISPER_MODEL_SIZE}'...")
@@ -91,7 +94,7 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
         'outtmpl': base + ".%(ext)s",
         'quiet': False,
         'noplaylist': True,
-        'cookiefile': 'cookies.txt',
+        'cookiefile': COOKIEFILE,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',

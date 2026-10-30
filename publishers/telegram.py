@@ -1,6 +1,7 @@
 """Публикация выжимки в Telegram-канал + пайплайн обработки видео."""
 
 import asyncio
+import html
 import os
 import re
 import sys
@@ -40,8 +41,24 @@ def set_bot(bot_instance):
     _bot = bot_instance
 
 
+# ─── HTML sanitization ───────────────────────────────────
+
+_ALLOWED_TAGS = ("b", "i")
+
+
+def _sanitize_summary_html(text: str) -> str:
+    """Пропускает только <b>, </b>, <i>, </i>. Всё остальное экранирует."""
+    if not text:
+        return ""
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    for tag in _ALLOWED_TAGS:
+        text = text.replace(f"&lt;{tag}&gt;", f"<{tag}>")
+        text = text.replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+    return text
+
+
 def _looks_truncated_title(title: str) -> bool:
-    """RSS отдаёт обрезанные заголовки. Признаки: пусто, коротко, конец на пунктуации."""
     if not title:
         return True
     if len(title) < 10:
@@ -49,7 +66,6 @@ def _looks_truncated_title(title: str) -> bool:
     stripped = title.rstrip()
     if stripped.endswith(("/", "-", "—", "|", ":", ",")):
         return True
-    # Если в заголовке нет ни одной буквы (только эмодзи/пунктуация) — тоже
     if not re.search(r'[А-Яа-яA-Za-z]', title):
         return True
     return False
@@ -60,15 +76,19 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
     video_id = _extract_video_id(video_url)
     date_str = _format_published_date(published_at)
 
+    safe_expert = html.escape(expert_name or "")
+    safe_bio = html.escape(expert_bio or "")
+    safe_channel = html.escape(channel_name or "")
+
     parts = []
     if video_title:
         parts.append(_format_title(video_title))
-    el = f"<b>ЭКСПЕРТ</b>\n{expert_name}"
+    el = f"<b>ЭКСПЕРТ</b>\n{safe_expert}"
     if expert_bio:
-        el += f" — {expert_bio}"
+        el += f" — {safe_bio}"
     parts.append(el)
-    if channel_name and channel_name.strip().lower() != expert_name.strip().lower():
-        parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
+    if channel_name and channel_name.strip().lower() != (expert_name or "").strip().lower():
+        parts.append(f"<b>КАНАЛ</b>\n{safe_channel}")
     if date_str:
         parts.append(f"<b>ОПУБЛИКОВАНО</b>\n{date_str}")
     parts.append("<i>Выжимка ниже ↓</i>")
@@ -90,9 +110,10 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
         await _bot.send_message(chat_id=CHANNEL_ID, text=caption)
 
     hashtags = generate_hashtags(expert_name, summary) if GENERATE_HASHTAGS else ""
-    text = f"{summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
+    safe_summary = _sanitize_summary_html(summary)
+    text = f"{safe_summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
     if hashtags:
-        text += f"\n{hashtags}\n"
+        text += f"\n{html.escape(hashtags)}\n"
     text += f"\n<i>Сгенерировано автоматически.</i>"
 
     if len(text) <= TELEGRAM_MAX_LEN:
@@ -150,9 +171,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         published_at = video_published_at
         vid = _extract_video_id(video_url)
 
-        # === ФОЛБЭК НА YT-DLP ДЛЯ ПОЛНОГО ЗАГОЛОВКА ===
-        # RSS отдаёт обрезанные заголовки (заканчиваются на «/», «-», «—»).
-        # Если заголовок подозрительный — запрашиваем полный через yt-dlp.
         need_info = (
             not video_title
             or _looks_truncated_title(video_title)
@@ -187,9 +205,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
             published_at = extra.get("published_at", "")
 
         # === КЕШ ТРАНСКРИПТОВ ===
-        # Если транскрипт уже был получен в прошлой попытке (например,
-        # задача упала на 429 после транскрибации) — берём из кеша
-        # и пропускаем скачивание + транскрибацию.
         transcript = ""
         if vid:
             transcript = get_cached_transcript(vid)
@@ -205,7 +220,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
             transcript = await asyncio.to_thread(transcribe_audio, audio_file, duration)
             audio_file = None
 
-            # Сохраняем транскрипт в кеш сразу после получения
             if vid and transcript:
                 save_cached_transcript(vid, transcript)
                 print(f"💾 транскрипт сохранён в кеш ({len(transcript)} символов)")

@@ -8,25 +8,28 @@ from config import DB_PATH
 def _save_predictions(video_id, expert_name, channel_name, predictions_list):
     if not predictions_list:
         return 0
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     saved = 0
-    for p in predictions_list:
-        try:
-            conn.execute(
-                "INSERT OR IGNORE INTO predictions "
-                "(video_id, expert_name, channel_name, prediction_text) VALUES (?, ?, ?, ?)",
-                (video_id, expert_name, channel_name, p)
-            )
-            saved += 1
-        except Exception:
-            pass
-    conn.commit()
-    conn.close()
+    try:
+        for p in predictions_list:
+            try:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO predictions "
+                    "(video_id, expert_name, channel_name, prediction_text) VALUES (?, ?, ?, ?)",
+                    (video_id, expert_name, channel_name, p)
+                )
+                if cur.rowcount > 0:
+                    saved += 1
+            except Exception:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
     return saved
 
 
 def _recent_predictions(limit=30):
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, expert_name, channel_name, prediction_text, "
@@ -41,7 +44,7 @@ def _recent_predictions(limit=30):
 def get_expert_priority_rating(expert_name: str) -> float:
     if not expert_name or expert_name == "Неизвестный эксперт":
         return 50.0
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     rows = conn.execute(
         "SELECT verdict FROM predictions WHERE expert_name = ? AND verdict IN ('confirmed','refuted')",
         (expert_name,)
@@ -55,7 +58,7 @@ def get_expert_priority_rating(expert_name: str) -> float:
 # ─── CRUD для редактирования прогнозов ────────────────────
 
 def get_prediction(pred_id: int) -> dict | None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT id, video_id, expert_name, channel_name, prediction_text, "
@@ -70,7 +73,7 @@ def update_prediction_text(pred_id: int, new_text: str) -> bool:
     new_text = (new_text or "").strip()
     if not new_text or len(new_text) > 400:
         return False
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     try:
         cur = conn.execute(
             "UPDATE predictions SET prediction_text = ? WHERE id = ?",
@@ -88,7 +91,7 @@ def update_prediction_text(pred_id: int, new_text: str) -> bool:
 def update_prediction_verdict(pred_id: int, verdict: str, notes: str = "") -> bool:
     if verdict not in ("confirmed", "refuted", "unverifiable", "pending", ""):
         return False
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     try:
         if verdict:
             cur = conn.execute(
@@ -112,7 +115,7 @@ def update_prediction_verdict(pred_id: int, verdict: str, notes: str = "") -> bo
 
 
 def delete_prediction(pred_id: int) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     try:
         cur = conn.execute("DELETE FROM predictions WHERE id = ?", (pred_id,))
         conn.commit()
@@ -144,7 +147,7 @@ def list_predictions(
 
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     total = conn.execute(
         f"SELECT COUNT(*) FROM predictions {where_sql}", params

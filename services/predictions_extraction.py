@@ -1,4 +1,4 @@
-"""Извлечение прогнозов из транскрипта. С фиксом 413."""
+"""Извлечение прогнозов из транскрипта. Head+Tail. С фиксом 413."""
 
 import json
 import re
@@ -98,16 +98,10 @@ def _parse_response(raw, current_year, max_year):
     return cleaned[:MAX_PREDICTIONS_PER_VIDEO]
 
 
-def extract_predictions(transcript, expert_name):
-    if not EXTRACT_PREDICTIONS:
+def _extract_from_text(text, expert_name, today_str, current_year, max_year):
+    if not text or not text.strip():
         return []
-    now_utc = datetime.now(timezone.utc)
-    today_str = now_utc.strftime('%d.%m.%Y')
-    current_year = now_utc.year
-    max_year = current_year + MAX_PREDICTION_HORIZON_YEARS
-
-    # Обрезаем вход безопасно
-    safe_text = transcript if len(transcript) <= _SAFE_INPUT_CHARS else transcript[:_SAFE_INPUT_CHARS]
+    safe_text = text if len(text) <= _SAFE_INPUT_CHARS else text[:_SAFE_INPUT_CHARS]
     prompt = _build_prompt(safe_text, expert_name, today_str, current_year, max_year)
 
     try:
@@ -116,8 +110,8 @@ def extract_predictions(transcript, expert_name):
         err = str(e).lower()
         if "413" in err or "request_too_large" in err:
             print(f"   ⚠️  413 в extract_predictions ({len(safe_text)} симв.) — уменьшаю")
-            safe_text = transcript[:_FALLBACK_INPUT_CHARS]
-            prompt = _build_prompt(safe_text, expert_name, today_str, current_year, max_year)
+            shorter = text[:_FALLBACK_INPUT_CHARS]
+            prompt = _build_prompt(shorter, expert_name, today_str, current_year, max_year)
             try:
                 r = _call_groq(prompt)
             except Exception as e2:
@@ -133,3 +127,37 @@ def extract_predictions(transcript, expert_name):
     except Exception as e:
         print(f"⚠️  прогнозы (parse): {e}")
         return []
+
+
+def extract_predictions(transcript, expert_name):
+    if not EXTRACT_PREDICTIONS:
+        return []
+    if not transcript:
+        return []
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime('%d.%m.%Y')
+    current_year = now_utc.year
+    max_year = current_year + MAX_PREDICTION_HORIZON_YEARS
+
+    seen = set()
+    all_preds = []
+
+    def _add(preds):
+        for p in preds:
+            if p not in seen:
+                seen.add(p)
+                all_preds.append(p)
+
+    # Голова — всегда
+    head = transcript[:_SAFE_INPUT_CHARS]
+    _add(_extract_from_text(head, expert_name, today_str, current_year, max_year))
+
+    # Хвост — если транскрипт ощутимо длиннее безопасного окна
+    if len(transcript) > _SAFE_INPUT_CHARS * 1.5:
+        tail_start = max(_SAFE_INPUT_CHARS, len(transcript) - _SAFE_INPUT_CHARS)
+        tail = transcript[tail_start:]
+        if tail.strip():
+            print(f"   🎯 хвост транскрипта ({len(tail)} симв.) — доп. извлечение")
+            _add(_extract_from_text(tail, expert_name, today_str, current_year, max_year))
+
+    return all_preds[:MAX_PREDICTIONS_PER_VIDEO]

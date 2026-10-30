@@ -3,7 +3,6 @@
 import html
 import re
 import time
-from datetime import datetime, timezone
 
 from config import (
     GROQ_DELAY_BETWEEN_CHUNKS, GROQ_MAX_RETRIES, GROQ_MODEL,
@@ -93,12 +92,13 @@ def neutralize_title(video_title):
 # ─── Форматирование заголовка для публикации ─────────────
 
 def _format_title(title, max_len=MAX_TITLE_LEN):
+    """HTML-safe форматирование. Экранирует пользовательские символы."""
     if not title:
         return ""
-    title = html.unescape(title)
+    title = html.unescape(title).strip()
     if len(title) > max_len:
         title = title[:max_len - 1] + "…"
-    return f"<b>{title.upper()}</b>"
+    return f"<b>{html.escape(title.upper())}</b>"
 
 
 # ─── Groq с ретраями ──────────────────────────────────────
@@ -120,17 +120,11 @@ def _call_groq_with_retry(messages, temperature, max_tokens, label=""):
                 print(f"      ⏸  429 [{label}], {wait:.0f}с")
                 time.sleep(wait)
                 continue
-            if "413" in err or "request_too_large" in err:
-                raise
             raise
     raise RuntimeError("Groq: 429")
 
 
 # ─── Фикс 413: безопасный размер входа ────────────────────
-# gpt-oss-120b в Groq принимает ~6000-8000 токенов на вход
-# в зависимости от тарифа. 1 токен ≈ 2-3 символа для русского.
-# 14000 символов ≈ 5000-7000 токенов — безопасно.
-# Если всё равно 413 — уменьшаем и пробуем ещё раз.
 
 _SAFE_INPUT_CHARS = 14000
 _FALLBACK_INPUT_CHARS = 7000
@@ -176,7 +170,6 @@ def _summarize_chunk(text, is_final):
 Выжимка:"""
         max_tokens = 1000
 
-    # Обрезаем с конца, если текст слишком длинный
     safe_text = text if len(text) <= _SAFE_INPUT_CHARS else text[:_SAFE_INPUT_CHARS]
     prompt = prompt_template.replace("{text}", safe_text)
 
@@ -219,6 +212,7 @@ def summarize_text(text):
 
 
 def _check_context_errors(summary, original):
+    """Диагностика подмены контекста (Украина ↔ Россия). Логирует, не правит."""
     ukr = ["рада", "зеленск", "киев", "украин", "київ"]
     rus = ["дума", "путин", "кремл", "россий", "рф "]
     tl, sl = original.lower(), summary.lower()
