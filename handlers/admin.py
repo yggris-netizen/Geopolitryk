@@ -157,7 +157,6 @@ async def cmd_errors(message: Message):
 async def cmd_predictions(message: Message):
     if not _is_owner(message):
         return
-    # Делегируем в handlers/predictions.py, если он подключён
     try:
         from handlers.predictions import cmd_predictions as _pred_list
         await _pred_list(message)
