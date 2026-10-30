@@ -96,10 +96,16 @@ def _get_uploads_playlist_id(channel_id: str) -> str:
 
 def _get_channel_videos_rss(channel_id: str) -> list:
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    # Таймаут увеличен до 30 секунд: RSS-фиды YouTube иногда отвечают медленно
+    # (было 10 секунд — иногда не хватало, отсюда "handshake timed out").
+    # Одна попытка + fallback на API.
     try:
-        resp = httpx.get(url, timeout=10.0)
+        resp = httpx.get(url, timeout=30.0)
         resp.raise_for_status()
         xml_text = resp.text
+    except httpx.TimeoutException as e:
+        print(f"   ⏱  RSS timeout (30с): {e}")
+        return []
     except Exception as e:
         print(f"   ❌ RSS fetch: {e}")
         return []
@@ -341,7 +347,11 @@ def get_new_videos_from_channel(channel_id: str) -> list:
 
 def get_video_info_ytdlp(url: str) -> dict:
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True}) as ydl:
+        with yt_dlp.YoutubeDL({
+            'quiet': True,
+            'skip_download': True,
+            'cookiefile': 'cookies.txt',
+        }) as ydl:
             info = ydl.extract_info(url, download=False)
             upload_date = info.get("upload_date", "")
             published_at = ""
