@@ -114,7 +114,7 @@ MAX_PREDICTION_HORIZON_YEARS = 5
 # Пауза между чанками Map-Reduce (секунды).
 # 15 секунд — для бесплатного тира Groq (8000 TPM на openai/gpt-oss-20b).
 # Было 5 секунд, но тогда 2-3 чанка съедали TPM и на прогнозы не хватало.
-GROQ_DELAY_BETWEEN_CHUNKS = 15
+GROQ_DELAY_BETWEEN_CHUNKS = 20
 GROQ_MAX_RETRIES = 5
 
 DISPLAY_TIMEZONE_OFFSET = 3

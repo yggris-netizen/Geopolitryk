@@ -48,6 +48,22 @@ def _looks_like_surname(word: str) -> bool:
     return any(word.lower().endswith(s) for s in _SURNAME_SUFFIXES)
 
 
+def _is_surname_by_morph(word: str) -> bool:
+    if not word or not MORPH_AVAILABLE:
+        return False
+    try:
+        parsed = _MORPH.parse(word)
+        if not parsed:
+            return False
+        return "Surn" in parsed[0].tag
+    except Exception:
+        return False
+
+
+def _is_surname_robust(word: str) -> bool:
+    return _looks_like_surname(word) or _is_surname_by_morph(word)
+
+
 def _sanitize_expert_name(name: str) -> str:
     if not name or name == "Неизвестный эксперт":
         return name
@@ -68,7 +84,7 @@ def _sanitize_expert_name(name: str) -> str:
         for suf in _BAD_SUFFIXES:
             if w.lower().endswith(suf) and len(w) > len(suf) + 3:
                 w_new = w[:-len(suf)]
-                if _looks_like_surname(w_new) or (MORPH_AVAILABLE and _MORPH.parse(w_new)):
+                if _is_surname_robust(w_new) or (MORPH_AVAILABLE and _MORPH.parse(w_new)):
                     print(f"      🧹 убираю «{suf}»: {w} → {w_new}")
                     w = w_new
                     break
@@ -101,14 +117,17 @@ def _to_nominative(name: str) -> str:
     return " ".join(result)
 
 
-def _ensure_surname_first(name: str) -> str:
+def _ensure_name_first(name: str) -> str:
+    """Меняет «Фамилия Имя» → «Имя Фамилия»."""
     if not name:
         return name
     words = name.split()
     if len(words) != 2:
         return name
     a, b = words
-    if _looks_like_surname(b) and not _looks_like_surname(a):
+    a_is_surn = _is_surname_robust(a)
+    b_is_surn = _is_surname_robust(b)
+    if a_is_surn and not b_is_surn:
         return f"{b} {a}"
     return name
 
@@ -116,13 +135,13 @@ def _ensure_surname_first(name: str) -> str:
 def _finalize_name(name: str) -> str:
     if not name or name == "Неизвестный эксперт":
         return name
-    name = _ensure_surname_first(_to_nominative(name))
+    name = _ensure_name_first(_to_nominative(name))
     name = _sanitize_expert_name(name)
     key = name.lower().strip()
     if key in KNOWN_EXPERT_FULL and " " not in key:
         expanded = KNOWN_EXPERT_FULL[key]
-        print(f"      📖 полное имя: {name} → {expanded}")
-        name = expanded
+        name = _ensure_name_first(expanded)
+        print(f"      📖 полное имя: {key} → {name}")
     return name
 
 
@@ -159,7 +178,7 @@ def _is_likely_person(name: str) -> bool:
             if parsed and any(k in str(parsed[0].tag) for k in ('Name', 'Surn', 'Patr')):
                 return True
         for w in words:
-            if any(w.lower().endswith(s) for s in _SURNAME_SUFFIXES):
+            if _is_surname_robust(w):
                 return True
             if w.lower().endswith(("ым", "им", "ом", "ем")):
                 return True
@@ -269,8 +288,8 @@ def _expand_surname_in_transcript(surname: str, transcript: str) -> str:
             m = re.search(pat, window)
             if m:
                 part = m.group(1)
-                if not _looks_like_surname(part) and 3 <= len(part) <= 25:
-                    res = _to_nominative(f"{v.title()} {part}")
+                if not _is_surname_robust(part) and 3 <= len(part) <= 25:
+                    res = _to_nominative(f"{part} {v.title()}")
                     print(f"      (расширил: {surname} → {res})")
                     return res
     return surname.title() if surname.isupper() else surname
@@ -285,6 +304,7 @@ def _extract_name_from_intro(transcript: str) -> str:
         r'(?:в\s+эфире|в\s+студии)\s+(?:был[аи]?)?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
         r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+),?\s+(?:политолог|политик|экономист|журналист|эксперт|аналитик)',
         r'мой\s+собеседник\s*[-—:]?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
+        r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+),\s*эксперт',
     ]
     for pat in patterns:
         m = re.search(pat, intro)
@@ -328,15 +348,14 @@ def _is_owner_name(name: str, channel_owner: str) -> bool:
         if len(wa) < 4:
             continue
         for wb in w2:
-            if wa == wb and _looks_like_surname(wa):
+            if wa == wb and _is_surname_robust(wa):
                 return True
     return False
 
 
-# ─── Новая LLM-детекция: массив экспертов ───────────────────
+# ─── LLM-детекция гостей ───────────────────────────────────
 
 def _parse_experts_json(raw: str) -> list[dict]:
-    """Парсит JSON-массив [{"name": ..., "bio": ...}, ...]."""
     raw = re.sub(r'^```(?:json)?\s*', '', raw)
     raw = re.sub(r'\s*```$', '', raw)
     if not raw:
@@ -365,7 +384,6 @@ def _parse_experts_json(raw: str) -> list[dict]:
 
 
 def _llm_detect_experts(video_title, transcript, channel_name, channel_type, channel_owner):
-    """Возвращает список гостей (не автора канала)."""
     if channel_type == "author":
         hint = (f"АВТОРСКИЙ канал «{channel_name}». "
                 f"Владелец — {channel_owner} — ВЕДУЩИЙ. Эксперты — ГОСТИ, НЕ ведущий.")
@@ -383,14 +401,14 @@ def _llm_detect_experts(video_title, transcript, channel_name, channel_type, cha
 - Заголовок: {video_title or "(без названия)"}
 
 Верни JSON-массив объектов:
-[{{"name": "Имя Фамилия", "bio": "политолог"}}, {{"name": "Другой Гость", "bio": "экономист"}}]
+[{{"name": "Имя Фамилия", "bio": "политолог"}}, {{"name": "Второй Гость", "bio": "экономист"}}]
 
 ПРАВИЛА:
 1. Эксперт — гость, НЕ ведущий. Владельца канала («{channel_owner or ''}») НЕ включай.
-2. Включай ВСЕХ гостей: 1, 2 или 3. Если два гостя — верни два объекта.
-3. name — «Имя Фамилия» или «Фамилия Имя», в ИМЕНИТЕЛЬНОМ падеже.
+2. Включай ВСЕХ гостей: 1, 2 или 3.
+3. name — ТОЛЬКО в формате «Имя Фамилия» (например, «Юрий Воскресенский», НЕ «Воскресенский Юрий»), в ИМЕНИТЕЛЬНОМ падеже.
 4. bio — специализация из транскрипта (политолог, экономист, военный аналитик, депутат и т.п.). Коротко, до 40 символов. Если не определить — пустая строка.
-5. Если в видео только ведущий без гостей — верни пустой массив [].
+5. Если в видео только ведущий без гостей — верни [].
 6. Если не определить — [].
 
 Нет гостей → [].
@@ -417,16 +435,11 @@ JSON:"""
         return []
 
 
-# ─── Главная функция: detect_experts ───────────────────────
+# ─── Главная функция ───────────────────────────────────────
 
 def detect_experts(video_title, transcript, description="",
                    channel_name="", channel_type="media", channel_owner=""):
-    """
-    Возвращает список экспертов:
-    [{"name": "Иванов Иван", "bio": "политолог", "role": "guest"}]
-    [{"name": "Руслан Бортник", "bio": "", "role": "author"}]  — если выступает автор канала
-    [{"name": "Неизвестный эксперт", "bio": "", "role": "unknown"}]
-    """
+    """Возвращает [{name, bio, role}]."""
     print("   Шаг 1: интро...")
     name = _extract_name_from_intro(transcript)
     if name:
@@ -465,7 +478,6 @@ def detect_experts(video_title, transcript, description="",
                 return [{"name": name, "bio": bio, "role": "guest"}]
         print("      ⚠️  нет")
 
-    # Эвристики не нашли гостя. Для author — экономия TPM: сразу fallback на канал.
     if channel_type == "author" and channel_owner:
         on = _finalize_name(channel_owner)
         print("   Шаг 4: LLM — пропускаю (author без гостя в эвристиках)")
@@ -481,7 +493,7 @@ def detect_experts(video_title, transcript, description="",
             if not n or n == "Неизвестный эксперт":
                 continue
             if channel_type == "author" and _is_owner_name(n, channel_owner):
-                continue  # это ведущий, не гость
+                continue
             bio = generate_expert_bio(n, transcript) or g.get("bio", "")
             result.append({"name": n, "bio": bio, "role": "guest"})
         if result:
@@ -498,11 +510,8 @@ def detect_experts(video_title, transcript, description="",
     return [{"name": "Неизвестный эксперт", "bio": "", "role": "unknown"}]
 
 
-# ─── Обёртка для обратной совместимости ─────────────────────
-
 def detect_expert_name(video_title, transcript, description="",
                        channel_name="", channel_type="media", channel_owner=""):
-    """Совместимость: возвращает строку с ФИО (объединённую через запятую)."""
     experts = detect_experts(video_title, transcript, description=description,
                              channel_name=channel_name, channel_type=channel_type,
                              channel_owner=channel_owner)

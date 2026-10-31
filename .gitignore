@@ -13,3 +13,5 @@ audio.*
 audio.part*.m4a
 cookies.txt
 youtube-cookies.txt
+check_db.py
+cleanup_bortnik.py
