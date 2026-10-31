@@ -23,6 +23,7 @@ RUN npm ci && npx tsc
 
 # Возвращаемся в /app, копируем код бота и скрипт запуска
 WORKDIR /app
+# cache-bust: 2026-10-31-1
 COPY . .
 RUN chmod +x start.sh
 
