@@ -1,7 +1,8 @@
-"""Извлечение прогнозов из транскрипта. Head+Tail. С фиксом 413."""
+"""Извлечение прогнозов из транскрипта. Оптимизировано под TPM Groq free tier."""
 
 import json
 import re
+import time
 from datetime import datetime, timezone
 
 from config import (
@@ -11,8 +12,11 @@ from config import (
 from services.llm import groq_client
 
 
-_SAFE_INPUT_CHARS = 12000
-_FALLBACK_INPUT_CHARS = 6000
+# TPM Groq free tier = 8000/мин. Один запрос не должен быть больше ~4000 токенов.
+# 6000 символов русского ≈ 3000-4000 входных токенов + 2000 выходных = ~6000 токенов.
+_SAFE_INPUT_CHARS = 6000
+_FALLBACK_INPUT_CHARS = 3000
+_MAX_OUTPUT_TOKENS = 2000
 
 
 def _build_prompt(transcript, expert_name, today_str, current_year, max_year):
@@ -20,33 +24,32 @@ def _build_prompt(transcript, expert_name, today_str, current_year, max_year):
 
 СЕГОДНЯ: {today_str}. Текущий год: {current_year}.
 
-ПРОГНОЗ — это КОНКРЕТНОЕ утверждение о БУДУЩЕМ, которое можно проверить:
-- Есть событие (что именно произойдёт)
+ПРОГНОЗ — конкретное утверждение о БУДУЩЕМ с проверяемым исходом:
+- Есть событие (что произойдёт)
 - Есть срок/дата (когда)
-- Есть проверяемый исход (да/нет, случилось/не случилось)
+- Можно проверить (да/нет)
 
 НЕ ПРОГНОЗ:
-- Общие рассуждения («ситуация будет ухудшаться»)
+- Общие рассуждения («ситуация ухудшится»)
 - Оценки прошлого
-- Формулировки без конкретики («произойдёт событие, о котором говорится»)
-- Прогнозы без срока
+- Без конкретики («произойдёт событие, о котором говорится»)
+- Без срока
 
-ПЛОХИЕ примеры (НЕ включай):
+ПЛОХО (НЕ включай):
 - «До 27 октября 2026 года произойдёт событие, о котором говорится в интервью»
 - «Ситуация изменится в ближайшее время»
-- «Эксперт считает, что всё будет плохо»
 
-ХОРОШИЕ примеры (включай):
+ХОРОШО (включай):
 - «В ноябре 2026 года в Абу-Даби пройдут переговоры»
-- «Если война продлится 2 года, конфликт закончится до 2029 года»
 - «Трамп подпишет указ до конца декабря 2026 года»
 
 ВАЖНО:
-- Не используй годы РАНЬШЕ {current_year}
+- Годы РАНЬШЕ {current_year} — не включай
 - Горизонт > {MAX_PREDICTION_HORIZON_YEARS} лет — не включай
 - Максимум {MAX_PREDICTIONS_PER_VIDEO} прогнозов
+- Коротко, до 300 символов каждый
 
-JSON-массив строк:
+JSON-массив:
 ["прогноз 1", "прогноз 2"]
 
 Нет — [].
@@ -60,10 +63,26 @@ JSON:"""
 
 
 def _call_groq(prompt):
-    return groq_client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model=GROQ_MODEL, temperature=0.2, max_tokens=4000,
-    )
+    """Groq-вызов с retry при 429 (TPM)."""
+    last_err = None
+    for attempt in range(5):
+        try:
+            return groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=GROQ_MODEL, temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS,
+            )
+        except Exception as e:
+            last_err = e
+            err = str(e).lower()
+            if "429" in err or "rate_limit" in err:
+                m = re.search(r'try again in ([\d.]+)s', str(e))
+                wait = float(m.group(1)) + 5 if m else 45
+                wait = max(wait, 45)
+                print(f"      ⏸  429 [predictions], ждём {wait:.0f}с (попытка {attempt+1}/5)")
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError(f"Groq: 429 после 5 попыток: {last_err}")
 
 
 def _parse_response(raw, current_year, max_year):
@@ -98,10 +117,15 @@ def _parse_response(raw, current_year, max_year):
     return cleaned[:MAX_PREDICTIONS_PER_VIDEO]
 
 
-def _extract_from_text(text, expert_name, today_str, current_year, max_year):
-    if not text or not text.strip():
+def extract_predictions(transcript, expert_name):
+    if not EXTRACT_PREDICTIONS:
         return []
-    safe_text = text if len(text) <= _SAFE_INPUT_CHARS else text[:_SAFE_INPUT_CHARS]
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime('%d.%m.%Y')
+    current_year = now_utc.year
+    max_year = current_year + MAX_PREDICTION_HORIZON_YEARS
+
+    safe_text = transcript if len(transcript) <= _SAFE_INPUT_CHARS else transcript[:_SAFE_INPUT_CHARS]
     prompt = _build_prompt(safe_text, expert_name, today_str, current_year, max_year)
 
     try:
@@ -109,9 +133,9 @@ def _extract_from_text(text, expert_name, today_str, current_year, max_year):
     except Exception as e:
         err = str(e).lower()
         if "413" in err or "request_too_large" in err:
-            print(f"   ⚠️  413 в extract_predictions ({len(safe_text)} симв.) — уменьшаю")
-            shorter = text[:_FALLBACK_INPUT_CHARS]
-            prompt = _build_prompt(shorter, expert_name, today_str, current_year, max_year)
+            print(f"   ⚠️  413 в extract_predictions ({len(safe_text)} симв.) — уменьшаю до {_FALLBACK_INPUT_CHARS}")
+            safe_text = transcript[:_FALLBACK_INPUT_CHARS]
+            prompt = _build_prompt(safe_text, expert_name, today_str, current_year, max_year)
             try:
                 r = _call_groq(prompt)
             except Exception as e2:
@@ -127,37 +151,3 @@ def _extract_from_text(text, expert_name, today_str, current_year, max_year):
     except Exception as e:
         print(f"⚠️  прогнозы (parse): {e}")
         return []
-
-
-def extract_predictions(transcript, expert_name):
-    if not EXTRACT_PREDICTIONS:
-        return []
-    if not transcript:
-        return []
-    now_utc = datetime.now(timezone.utc)
-    today_str = now_utc.strftime('%d.%m.%Y')
-    current_year = now_utc.year
-    max_year = current_year + MAX_PREDICTION_HORIZON_YEARS
-
-    seen = set()
-    all_preds = []
-
-    def _add(preds):
-        for p in preds:
-            if p not in seen:
-                seen.add(p)
-                all_preds.append(p)
-
-    # Голова — всегда
-    head = transcript[:_SAFE_INPUT_CHARS]
-    _add(_extract_from_text(head, expert_name, today_str, current_year, max_year))
-
-    # Хвост — если транскрипт ощутимо длиннее безопасного окна
-    if len(transcript) > _SAFE_INPUT_CHARS * 1.5:
-        tail_start = max(_SAFE_INPUT_CHARS, len(transcript) - _SAFE_INPUT_CHARS)
-        tail = transcript[tail_start:]
-        if tail.strip():
-            print(f"   🎯 хвост транскрипта ({len(tail)} симв.) — доп. извлечение")
-            _add(_extract_from_text(tail, expert_name, today_str, current_year, max_year))
-
-    return all_preds[:MAX_PREDICTIONS_PER_VIDEO]

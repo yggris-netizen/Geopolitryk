@@ -1,6 +1,7 @@
-"""Определение эксперта по транскрипту, заголовку, описанию, LLM."""
+"""Определение эксперта(ов) по транскрипту, заголовку, описанию, LLM."""
 
 import html
+import json
 import re
 
 from config import GROQ_MODEL
@@ -332,71 +333,100 @@ def _is_owner_name(name: str, channel_owner: str) -> bool:
     return False
 
 
-def _llm_detect_expert(video_title, transcript, channel_name, channel_type, channel_owner):
-    if channel_type == "author":
-        hint = (f"Это АВТОРСКИЙ канал «{channel_name}». Владелец — {channel_owner} — "
-                f"ВЕДУЩИЙ канала. Эксперт — ГОСТЬ. НЕ возвращай имя ведущего.")
-    elif channel_type == "personal":
-        hint = (f"Это ПЕРСОНАЛЬНЫЙ канал «{channel_name}». Владелец — {channel_owner}. "
-                f"Если гость не назван, эксперт — владелец.")
-    else:
-        hint = f"Это МЕДИЙНЫЙ канал «{channel_name}». Эксперт — ГОСТЬ, а НЕ ведущий."
+# ─── Новая LLM-детекция: массив экспертов ───────────────────
 
-    prompt = f"""Определи ГЛАВНОГО ЭКСПЕРТА (гостя) в этом видео.
+def _parse_experts_json(raw: str) -> list[dict]:
+    """Парсит JSON-массив [{"name": ..., "bio": ...}, ...]."""
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw)
+    if not raw:
+        return []
+    m = re.search(r'\[.*\]', raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(arr, list):
+        return []
+    result = []
+    for item in arr[:5]:
+        if isinstance(item, dict):
+            name = (item.get("name") or "").strip()
+            bio = (item.get("bio") or "").strip()[:60]
+            if name and 2 <= len(name) <= 60:
+                result.append({"name": name, "bio": bio})
+        elif isinstance(item, str):
+            s = item.strip()
+            if s and 2 <= len(s) <= 60:
+                result.append({"name": s, "bio": ""})
+    return result
+
+
+def _llm_detect_experts(video_title, transcript, channel_name, channel_type, channel_owner):
+    """Возвращает список гостей (не автора канала)."""
+    if channel_type == "author":
+        hint = (f"АВТОРСКИЙ канал «{channel_name}». "
+                f"Владелец — {channel_owner} — ВЕДУЩИЙ. Эксперты — ГОСТИ, НЕ ведущий.")
+    elif channel_type == "personal":
+        hint = (f"ПЕРСОНАЛЬНЫЙ канал «{channel_name}». Владелец — {channel_owner}.")
+    else:
+        hint = f"МЕДИЙНЫЙ канал «{channel_name}». Эксперты — ГОСТИ."
+
+    prompt = f"""Определи ВСЕХ ЭКСПЕРТОВ-ГОСТЕЙ в этом видео.
 
 КОНТЕКСТ:
-- Канал: «{channel_name}»
-- Тип: {channel_type}
+- Канал: «{channel_name}», тип: {channel_type}
 - {hint}
 - Владелец канала: {channel_owner or '(нет)'}
 - Заголовок: {video_title or "(без названия)"}
 
-ПРИМЕРЫ:
-
-Пример 1 (author, гость назван):
-Канал: «Александр Шелест», владелец: Александр Шелест
-Транскрипт: «У нас в гостях Дмитрий Спивак, политолог…»
-Ответ: Спивак Дмитрий (НЕ «Шелест Александр» — он ведущий)
-
-Пример 2 (media, гость на связи):
-Канал: «UKRLIFETV», тип: media
-Транскрипт: «Сегодня у нас на связи Руслан Бизяев…»
-Ответ: Бизяев Руслан
-
-Пример 3 (гость не назван):
-Ответ: НЕИЗВЕСТНО
+Верни JSON-массив объектов:
+[{{"name": "Имя Фамилия", "bio": "политолог"}}, {{"name": "Другой Гость", "bio": "экономист"}}]
 
 ПРАВИЛА:
-1. Эксперт — тот, кто даёт интервью, НЕ ведущий.
-2. Ищи «в гостях», «на связи», «наш гость», «в студии».
-3. Или имя в заголовке после «|», «—», «:», «для», «с».
-4. Верни ТОЛЬКО «Имя Фамилия» или «Фамилия Имя» в ИМЕНИТЕЛЬНОМ падеже.
-5. Не определить — верни РОВНО: НЕИЗВЕСТНО
+1. Эксперт — гость, НЕ ведущий. Владельца канала («{channel_owner or ''}») НЕ включай.
+2. Включай ВСЕХ гостей: 1, 2 или 3. Если два гостя — верни два объекта.
+3. name — «Имя Фамилия» или «Фамилия Имя», в ИМЕНИТЕЛЬНОМ падеже.
+4. bio — специализация из транскрипта (политолог, экономист, военный аналитик, депутат и т.п.). Коротко, до 40 символов. Если не определить — пустая строка.
+5. Если в видео только ведущий без гостей — верни пустой массив [].
+6. Если не определить — [].
+
+Нет гостей → [].
 
 Начало транскрипта:
 ---
 {transcript[:8000]}
 ---
 
-Имя эксперта:"""
+JSON:"""
     try:
         r = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model=GROQ_MODEL, temperature=0.1, max_tokens=500,
+            model=GROQ_MODEL, temperature=0.1, max_tokens=800,
         )
-        name = _normalize_name(r.choices[0].message.content)
-        if not name or name.upper() == "НЕИЗВЕСТНО" or len(name) > 60 or "\n" in name:
-            return ""
-        if name.lower() in ("эксперт", "гость", "неизвестно"):
-            return ""
-        return name
+        raw = r.choices[0].message.content.strip()
+        return _parse_experts_json(raw)
     except Exception as e:
-        print(f"⚠️  LLM: {e}")
-        return ""
+        err = str(e).lower()
+        if "429" in err or "rate_limit" in err:
+            print("      ⏸  429 [experts] — пропускаю LLM")
+            return []
+        print(f"⚠️  LLM experts: {e}")
+        return []
 
 
-def detect_expert_name(video_title, transcript, description="",
-                       channel_name="", channel_type="media", channel_owner=""):
+# ─── Главная функция: detect_experts ───────────────────────
+
+def detect_experts(video_title, transcript, description="",
+                   channel_name="", channel_type="media", channel_owner=""):
+    """
+    Возвращает список экспертов:
+    [{"name": "Иванов Иван", "bio": "политолог", "role": "guest"}]
+    [{"name": "Руслан Бортник", "bio": "", "role": "author"}]  — если выступает автор канала
+    [{"name": "Неизвестный эксперт", "bio": "", "role": "unknown"}]
+    """
     print("   Шаг 1: интро...")
     name = _extract_name_from_intro(transcript)
     if name:
@@ -405,7 +435,8 @@ def detect_expert_name(video_title, transcript, description="",
             print(f"      ⚠️  интро дало имя ведущего «{name}» — пропускаю")
         else:
             print(f"      ✅ {name}")
-            return name
+            bio = generate_expert_bio(name, transcript)
+            return [{"name": name, "bio": bio, "role": "guest"}]
     print("      ⚠️  нет")
 
     print("   Шаг 2: заголовок...")
@@ -417,7 +448,8 @@ def detect_expert_name(video_title, transcript, description="",
             print(f"      ⚠️  заголовок дал имя ведущего «{name}» — пропускаю")
         else:
             print(f"      ✅ {name}")
-            return name
+            bio = generate_expert_bio(name, transcript)
+            return [{"name": name, "bio": bio, "role": "guest"}]
     print("      ⚠️  нет")
 
     if description:
@@ -429,35 +461,56 @@ def detect_expert_name(video_title, transcript, description="",
                 print(f"      ⚠️  описание дало имя ведущего «{name}» — пропускаю")
             else:
                 print(f"      ✅ {name}")
-                return name
+                bio = generate_expert_bio(name, transcript)
+                return [{"name": name, "bio": bio, "role": "guest"}]
         print("      ⚠️  нет")
 
-    print("   Шаг 4: LLM...")
-    name = _llm_detect_expert(video_title, transcript, channel_name, channel_type, channel_owner)
-    if name:
-        name = _finalize_name(name)
-        if channel_type == "author" and _is_owner_name(name, channel_owner):
-            print(f"      ⚠️  LLM вернула имя ведущего «{name}» — пропускаю")
-        else:
-            print(f"      ✅ {name}")
-            return name
-    print("      ⚠️  нет")
-
-    # Шаг 5: fallback на владельца для personal
-    if channel_type == "personal" and channel_owner:
-        on = _finalize_name(channel_owner)
-        print(f"   Шаг 5: fallback владельца (personal): {on}")
-        return on
-
-    # Шаг 6: fallback на владельца для author
-    # Если на авторском канале гость не назван — эксперт = владелец канала
+    # Эвристики не нашли гостя. Для author — экономия TPM: сразу fallback на канал.
     if channel_type == "author" and channel_owner:
         on = _finalize_name(channel_owner)
-        print(f"   Шаг 6: fallback владельца (author): {on}")
-        return on
+        print("   Шаг 4: LLM — пропускаю (author без гостя в эвристиках)")
+        print(f"   Шаг 5: выступает автор канала: {on}")
+        return [{"name": on, "bio": "", "role": "author"}]
+
+    print("   Шаг 4: LLM (поиск гостей)...")
+    guests = _llm_detect_experts(video_title, transcript, channel_name, channel_type, channel_owner)
+    if guests:
+        result = []
+        for g in guests:
+            n = _finalize_name(g.get("name", ""))
+            if not n or n == "Неизвестный эксперт":
+                continue
+            if channel_type == "author" and _is_owner_name(n, channel_owner):
+                continue  # это ведущий, не гость
+            bio = generate_expert_bio(n, transcript) or g.get("bio", "")
+            result.append({"name": n, "bio": bio, "role": "guest"})
+        if result:
+            print(f"      ✅ гостей: {len(result)}")
+            return result
+    print("      ⚠️  нет")
+
+    if channel_type == "personal" and channel_owner:
+        on = _finalize_name(channel_owner)
+        print(f"   Шаг 5: fallback personal: {on}")
+        return [{"name": on, "bio": "", "role": "author"}]
 
     print("   ⚠️  не определено")
-    return "Неизвестный эксперт"
+    return [{"name": "Неизвестный эксперт", "bio": "", "role": "unknown"}]
+
+
+# ─── Обёртка для обратной совместимости ─────────────────────
+
+def detect_expert_name(video_title, transcript, description="",
+                       channel_name="", channel_type="media", channel_owner=""):
+    """Совместимость: возвращает строку с ФИО (объединённую через запятую)."""
+    experts = detect_experts(video_title, transcript, description=description,
+                             channel_name=channel_name, channel_type=channel_type,
+                             channel_owner=channel_owner)
+    if not experts:
+        return "Неизвестный эксперт"
+    if len(experts) == 1:
+        return experts[0]["name"]
+    return ", ".join(e["name"] for e in experts)
 
 
 def generate_expert_bio(expert_name, transcript):

@@ -18,7 +18,7 @@ from db.experts import _mark_expert_seen_today
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
 from db.transcripts import get_cached_transcript, save_cached_transcript
-from services.expert_detection import detect_expert_name, generate_expert_bio
+from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
 from services.summarization import (
     generate_hashtags, neutralize_title, summarize_text,
@@ -54,20 +54,73 @@ def _looks_truncated_title(title: str) -> bool:
     return False
 
 
-async def send_expert_post(video_url, video_title, expert_name, expert_bio,
-                            channel_name, summary, published_at=""):
+def _experts_block(experts: list[dict]) -> str:
+    """Форматирует блок экспертов для caption.
+    - Если есть гости (role=guest): "ЭКСПЕРТ(Ы): ..."
+    - Если только автор канала (role=author): "КАНАЛ: Имя"
+    - Иначе: "ЭКСПЕРТ: Неизвестный эксперт"
+    """
+    if not experts:
+        return "<b>ЭКСПЕРТ</b>\nНеизвестный эксперт"
+
+    guests = [e for e in experts if e.get("role") == "guest"]
+    authors = [e for e in experts if e.get("role") == "author"]
+
+    if guests:
+        if len(guests) == 1:
+            e = guests[0]
+            s = f"<b>ЭКСПЕРТ</b>\n{e['name']}"
+            if e.get("bio"):
+                s += f" — {e['bio']}"
+            return s
+        lines = ["<b>ЭКСПЕРТЫ</b>"]
+        for e in guests:
+            line = f"• {e['name']}"
+            if e.get("bio"):
+                line += f" — {e['bio']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    if authors:
+        e = authors[0]
+        return f"<b>КАНАЛ</b>\n{e['name']}"
+
+    return "<b>ЭКСПЕРТ</b>\nНеизвестный эксперт"
+
+
+def _experts_as_string(experts: list[dict]) -> str:
+    """Объединённое имя для БД (summary, predictions)."""
+    if not experts:
+        return "Неизвестный эксперт"
+    guests = [e for e in experts if e.get("role") == "guest"]
+    authors = [e for e in experts if e.get("role") == "author"]
+    if guests:
+        return ", ".join(e["name"] for e in guests)
+    if authors:
+        return f"{authors[0]['name']} (канал)"
+    return experts[0]["name"]
+
+
+async def send_expert_post(video_url, video_title, experts, channel_name, summary,
+                            published_at=""):
     video_id = _extract_video_id(video_url)
     date_str = _format_published_date(published_at)
 
     parts = []
     if video_title:
         parts.append(_format_title(video_title))
-    el = f"<b>ЭКСПЕРТ</b>\n{expert_name}"
-    if expert_bio:
-        el += f" — {expert_bio}"
-    parts.append(el)
-    if channel_name and channel_name.strip().lower() != expert_name.strip().lower():
-        parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
+    parts.append(_experts_block(experts))
+
+    # КАНАЛ (если это не сам автор канала и channel_name не совпадает с именем эксперта)
+    only_author = any(e.get("role") == "author" for e in experts) and not any(
+        e.get("role") == "guest" for e in experts
+    )
+    if channel_name and not only_author:
+        ch_low = channel_name.strip().lower()
+        is_expert = any((e.get("name") or "").strip().lower() == ch_low for e in experts)
+        if not is_expert:
+            parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
+
     if date_str:
         parts.append(f"<b>ОПУБЛИКОВАНО</b>\n{date_str}")
     parts.append("<i>Выжимка ниже ↓</i>")
@@ -88,7 +141,7 @@ async def send_expert_post(video_url, video_title, expert_name, expert_bio,
     if not sent:
         await _bot.send_message(chat_id=CHANNEL_ID, text=caption)
 
-    hashtags = generate_hashtags(expert_name, summary) if GENERATE_HASHTAGS else ""
+    hashtags = generate_hashtags(_experts_as_string(experts), summary) if GENERATE_HASHTAGS else ""
     text = f"{summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
     if hashtags:
         text += f"\n{hashtags}\n"
@@ -224,20 +277,17 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 display_title = n
                 print(f"✅ {display_title}\n")
 
-        print("🔍 Эксперт...")
-        expert_name = detect_expert_name(
+        print("🔍 Эксперт(ы)...")
+        experts = detect_experts(
             video_title, transcript, description=video_description,
             channel_name=channel_name, channel_type=channel_type,
             channel_owner=channel_owner,
         )
-        print(f"✅ {expert_name}\n")
-
-        print("📝 Специализация...")
-        expert_bio = generate_expert_bio(expert_name, transcript)
-        if expert_bio:
-            print(f"✅ {expert_bio}\n")
-        else:
-            print("⚠️  нет\n")
+        for e in experts:
+            mark = "🌐" if e.get("role") == "author" else "👤"
+            bio = f" — {e['bio']}" if e.get("bio") else ""
+            print(f"   {mark} {e['name']}{bio}")
+        print()
 
         print("🧠 Шаг 3/4: Суммаризация...")
         summary = summarize_text(transcript)
@@ -247,27 +297,27 @@ async def process_and_publish(video_url, video_title="", video_description="",
         print("📤 Шаг 4/4: Отправка...")
         await send_expert_post(
             video_url=video_url, video_title=display_title,
-            expert_name=expert_name, expert_bio=expert_bio,
+            experts=experts,
             channel_name=channel_name, summary=summary,
             published_at=published_at,
         )
         print("✅ Опубликовано\n")
 
-        _save_summary(vid, expert_name, channel_name, summary,
+        experts_str = _experts_as_string(experts)
+        _save_summary(vid, experts_str, channel_name, summary,
                       video_title=display_title, video_published_at=published_at)
-        _mark_expert_seen_today(expert_name)
+        for e in experts:
+            if e.get("role") == "guest":
+                _mark_expert_seen_today(e["name"])
 
         if EXTRACT_PREDICTIONS:
             try:
-                # Пауза 35 секунд: Groq free tier — 8000 TPM (tokens per minute).
-                # Map-Reduce суммаризация уже съела ~7900 TPM.
-                # Пауза даёт TPM восстановиться, иначе 429 rate_limit_exceeded.
-                print("⏸  пауза 35с перед прогнозами (восстановление TPM Groq)...")
-                await asyncio.sleep(35)
+                print("⏸  пауза 45с перед прогнозами (восстановление TPM Groq)...")
+                await asyncio.sleep(45)
                 print("📊 Прогнозы...")
-                preds = extract_predictions(transcript, expert_name)
+                preds = extract_predictions(transcript, experts_str)
                 if preds:
-                    saved = _save_predictions(vid, expert_name, channel_name, preds)
+                    saved = _save_predictions(vid, experts_str, channel_name, preds)
                     print(f"✅ Сохранено {saved}")
                     for p in preds:
                         print(f"   • {p[:120]}")
