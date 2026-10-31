@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from aiogram.enums import ParseMode
+from aiogram.types import LinkPreviewOptions
 
 from config import (
     CHANNEL_ID, DIAGNOSTIC_MODE, EXTRACT_PREDICTIONS,
@@ -33,15 +34,18 @@ from services.youtube import (
 
 _bot = None
 
+# Единая опция для всех send_message: не показывать превью ссылки.
+# Без неё Telegram добавляет карточку-превью YouTube в самый низ сообщения,
+# даже после «Сгенерировано автоматически» — это визуальный шум.
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
 
 def set_bot(bot_instance):
-    """Вызывается из bot.py при старте."""
     global _bot
     _bot = bot_instance
 
 
 def _looks_truncated_title(title: str) -> bool:
-    """RSS отдаёт обрезанные заголовки. Признаки: пусто, коротко, конец на пунктуации."""
     if not title:
         return True
     if len(title) < 10:
@@ -55,11 +59,6 @@ def _looks_truncated_title(title: str) -> bool:
 
 
 def _experts_block(experts: list[dict]) -> str:
-    """Форматирует блок экспертов для caption.
-    - Если есть гости (role=guest): "ЭКСПЕРТ(Ы): ..."
-    - Если только автор канала (role=author): "КАНАЛ: Имя"
-    - Иначе: "ЭКСПЕРТ: Неизвестный эксперт"
-    """
     if not experts:
         return "<b>ЭКСПЕРТ</b>\nНеизвестный эксперт"
 
@@ -89,7 +88,6 @@ def _experts_block(experts: list[dict]) -> str:
 
 
 def _experts_as_string(experts: list[dict]) -> str:
-    """Объединённое имя для БД (summary, predictions)."""
     if not experts:
         return "Неизвестный эксперт"
     guests = [e for e in experts if e.get("role") == "guest"]
@@ -111,7 +109,6 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
         parts.append(_format_title(video_title))
     parts.append(_experts_block(experts))
 
-    # КАНАЛ (если это не сам автор канала и channel_name не совпадает с именем эксперта)
     only_author = any(e.get("role") == "author" for e in experts) and not any(
         e.get("role") == "guest" for e in experts
     )
@@ -139,7 +136,11 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
         except Exception as e:
             print(f"⚠️  Фото: {e}")
     if not sent:
-        await _bot.send_message(chat_id=CHANNEL_ID, text=caption)
+        # Фолбэк: фото не удалось — только текст caption, без превью ссылки
+        await _bot.send_message(
+            chat_id=CHANNEL_ID, text=caption,
+            link_preview_options=NO_PREVIEW,
+        )
 
     hashtags = generate_hashtags(_experts_as_string(experts), summary) if GENERATE_HASHTAGS else ""
     text = f"{summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
@@ -148,8 +149,11 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
     text += f"\n<i>Сгенерировано автоматически.</i>"
 
     if len(text) <= TELEGRAM_MAX_LEN:
-        await _bot.send_message(chat_id=CHANNEL_ID, text=text)
-        print("✅ Выжимка")
+        await _bot.send_message(
+            chat_id=CHANNEL_ID, text=text,
+            link_preview_options=NO_PREVIEW,
+        )
+        print("✅ Выжимка (без превью ссылки)")
     else:
         print(f"✂️  Текст {len(text)} > {TELEGRAM_MAX_LEN}, разбиваю...")
         chunks = []
@@ -179,8 +183,11 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
 
         for i, part in enumerate(chunks, 1):
             header = f"<i>(часть {i}/{len(chunks)})</i>\n\n" if len(chunks) > 1 else ""
-            await _bot.send_message(chat_id=CHANNEL_ID, text=header + part)
-            print(f"✅ Выжимка {i}/{len(chunks)}")
+            await _bot.send_message(
+                chat_id=CHANNEL_ID, text=header + part,
+                link_preview_options=NO_PREVIEW,
+            )
+            print(f"✅ Выжимка {i}/{len(chunks)} (без превью ссылки)")
             await asyncio.sleep(1)
 
 
@@ -202,7 +209,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         published_at = video_published_at
         vid = _extract_video_id(video_url)
 
-        # === ФОЛБЭК НА YT-DLP ДЛЯ ПОЛНОГО ЗАГОЛОВКА ===
         need_info = (
             not video_title
             or _looks_truncated_title(video_title)
@@ -236,7 +242,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
             extra = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             published_at = extra.get("published_at", "")
 
-        # === КЕШ ТРАНСКРИПТОВ ===
         transcript = ""
         if vid:
             transcript = get_cached_transcript(vid)
