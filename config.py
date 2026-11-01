@@ -28,11 +28,11 @@ OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 
-# Модель по умолчанию — openai/gpt-oss-20b (бесплатный тир).
-# Лимит: 8000 TPM (tokens per minute). Поэтому нужны паузы между запросами
-# (GROQ_DELAY_BETWEEN_CHUNKS=15 и пауза 35с перед прогнозами).
-# Если нужен gpt-oss-120b (10000 TPM) — задайте GROQ_MODEL в env Bothost.
+# Основная модель (8000 TPM, 200K TPD)
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+# Fallback при исчерпании TPD на основной модели.
+# У каждой модели СВОЙ TPD, поэтому каскад даёт ~2x дневного лимита.
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
 DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
@@ -111,11 +111,22 @@ EXTRACT_PREDICTIONS = True
 MAX_PREDICTIONS_PER_VIDEO = 10
 MAX_PREDICTION_HORIZON_YEARS = 5
 
-# Пауза между чанками Map-Reduce (секунды).
-# 15 секунд — для бесплатного тира Groq (8000 TPM на openai/gpt-oss-20b).
-# Было 5 секунд, но тогда 2-3 чанка съедали TPM и на прогнозы не хватало.
-GROQ_DELAY_BETWEEN_CHUNKS = 20
-GROQ_MAX_RETRIES = 5
+
+# ─── Параметры Groq (TPM = 8000/мин, TPD = 200K/день) ─────
+# Chunk для Map-Reduce: 16000 символов ≈ 2-3 чанка для 40K транскрипта
+# (было 12000 → 4-5 чанков → лишний расход токенов).
+SUMMARIZE_CHUNK_CHARS = int(os.getenv("SUMMARIZE_CHUNK_CHARS", "16000"))
+# Выходных токенов для финальной суммаризации
+SUMMARIZE_FINAL_TOKENS = int(os.getenv("SUMMARIZE_FINAL_TOKENS", "3000"))
+# Выходных токенов для промежуточных чанков
+SUMMARIZE_PARTIAL_TOKENS = int(os.getenv("SUMMARIZE_PARTIAL_TOKENS", "1000"))
+
+# Пауза между чанками Map-Reduce (секунды)
+GROQ_DELAY_BETWEEN_CHUNKS = int(os.getenv("GROQ_DELAY_BETWEEN_CHUNKS", "20"))
+# Пауза перед извлечением прогнозов (секунды)
+GROQ_PREDICTIONS_PAUSE = int(os.getenv("GROQ_PREDICTIONS_PAUSE", "45"))
+# Максимум попыток при 429 на одной модели
+GROQ_MAX_RETRIES = int(os.getenv("GROQ_MAX_RETRIES", "5"))
 
 DISPLAY_TIMEZONE_OFFSET = 3
 
@@ -143,6 +154,7 @@ _TRANSIENT_ERROR_MARKERS = (
     "service unavailable", "bad gateway",
     " 500", " 502", " 503", " 504",
     "internal server error",
+    "tokens per day",
 )
 
 

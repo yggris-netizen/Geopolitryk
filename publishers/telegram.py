@@ -11,7 +11,8 @@ from aiogram.types import LinkPreviewOptions
 
 from config import (
     CHANNEL_ID, DIAGNOSTIC_MODE, EXTRACT_PREDICTIONS,
-    GENERATE_HASHTAGS, MAX_VIDEO_DURATION_SECONDS,
+    GENERATE_HASHTAGS, GROQ_PREDICTIONS_PAUSE,
+    MAX_VIDEO_DURATION_SECONDS,
     MIN_TRANSCRIPT_CHARS, MIN_VIDEO_DURATION_SECONDS,
     NEUTRALIZE_TITLE, TELEGRAM_MAX_LEN,
 )
@@ -34,9 +35,9 @@ from services.youtube import (
 
 _bot = None
 
-# Единая опция для всех send_message: не показывать превью ссылки.
-# Без неё Telegram добавляет карточку-превью YouTube в самый низ сообщения,
-# даже после «Сгенерировано автоматически» — это визуальный шум.
+# Отключаем превью ссылок во всех send_message:
+# без этого Telegram добавляет карточку-превью YouTube в самый низ,
+# даже после «Сгенерировано автоматически».
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
@@ -136,7 +137,6 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
         except Exception as e:
             print(f"⚠️  Фото: {e}")
     if not sent:
-        # Фолбэк: фото не удалось — только текст caption, без превью ссылки
         await _bot.send_message(
             chat_id=CHANNEL_ID, text=caption,
             link_preview_options=NO_PREVIEW,
@@ -317,8 +317,8 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         if EXTRACT_PREDICTIONS:
             try:
-                print("⏸  пауза 45с перед прогнозами (восстановление TPM Groq)...")
-                await asyncio.sleep(45)
+                print(f"⏸  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами (восстановление TPM Groq)...")
+                await asyncio.sleep(GROQ_PREDICTIONS_PAUSE)
                 print("📊 Прогнозы...")
                 preds = extract_predictions(transcript, experts_str)
                 if preds:

@@ -1,4 +1,4 @@
-"""Извлечение прогнозов из транскрипта. Оптимизировано под TPM Groq free tier."""
+"""Извлечение прогнозов. Каскад моделей на TPD + фикс 413."""
 
 import json
 import re
@@ -6,14 +6,13 @@ import time
 from datetime import datetime, timezone
 
 from config import (
-    EXTRACT_PREDICTIONS, GROQ_MODEL,
+    EXTRACT_PREDICTIONS, GROQ_FALLBACK_MODEL,
+    GROQ_MAX_RETRIES, GROQ_MODEL,
     MAX_PREDICTION_HORIZON_YEARS, MAX_PREDICTIONS_PER_VIDEO,
 )
 from services.llm import groq_client
 
 
-# TPM Groq free tier = 8000/мин. Один запрос не должен быть больше ~4000 токенов.
-# 6000 символов русского ≈ 3000-4000 входных токенов + 2000 выходных = ~6000 токенов.
 _SAFE_INPUT_CHARS = 6000
 _FALLBACK_INPUT_CHARS = 3000
 _MAX_OUTPUT_TOKENS = 2000
@@ -63,26 +62,44 @@ JSON:"""
 
 
 def _call_groq(prompt):
-    """Groq-вызов с retry при 429 (TPM)."""
+    """Groq с каскадом моделей: TPD → fallback, TPM → retry."""
+    models = [GROQ_MODEL]
+    if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
+        models.append(GROQ_FALLBACK_MODEL)
+
     last_err = None
-    for attempt in range(5):
-        try:
-            return groq_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=GROQ_MODEL, temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS,
-            )
-        except Exception as e:
-            last_err = e
-            err = str(e).lower()
-            if "429" in err or "rate_limit" in err:
-                m = re.search(r'try again in ([\d.]+)s', str(e))
-                wait = float(m.group(1)) + 5 if m else 45
-                wait = max(wait, 45)
-                print(f"      ⏸  429 [predictions], ждём {wait:.0f}с (попытка {attempt+1}/5)")
-                time.sleep(wait)
-                continue
-            raise
-    raise RuntimeError(f"Groq: 429 после 5 попыток: {last_err}")
+    for mi, model in enumerate(models):
+        is_last = (mi == len(models) - 1)
+        for attempt in range(GROQ_MAX_RETRIES):
+            try:
+                return groq_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model, temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS,
+                )
+            except Exception as e:
+                last_err = e
+                err = str(e).lower()
+
+                if "tokens per day" in err or "tpd" in err:
+                    short = model.split("/")[-1]
+                    if not is_last:
+                        next_short = models[mi + 1].split("/")[-1]
+                        print(f"      🔄 TPD [predictions] {short} → {next_short}")
+                        break
+                    raise RuntimeError(f"TPD exhausted on all models (predictions): {e}")
+
+                if ("429" in err or "rate_limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
+                    wait = 30 * (2 ** attempt)
+                    m = re.search(r'try again in ([\d.]+)s', str(e))
+                    if m:
+                        wait = max(float(m.group(1)) + 2, 5)
+                    print(f"      ⏸  429 [TPM predictions], {wait:.0f}с (попытка {attempt+1}/{GROQ_MAX_RETRIES})")
+                    time.sleep(wait)
+                    continue
+
+                raise
+
+    raise RuntimeError(f"Groq predictions: exhausted: {last_err}")
 
 
 def _parse_response(raw, current_year, max_year):

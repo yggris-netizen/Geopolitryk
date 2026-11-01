@@ -1,17 +1,16 @@
-"""Суммаризация, нейтрализация заголовков, хештеги. С фиксом 413."""
+"""Суммаризация, нейтрализация заголовков, хештеги. Фикс 413 + каскад моделей на TPD."""
 
 import html
 import re
 import time
 
 from config import (
-    GROQ_DELAY_BETWEEN_CHUNKS, GROQ_MAX_RETRIES, GROQ_MODEL,
-    MAX_TITLE_LEN,
+    GROQ_DELAY_BETWEEN_CHUNKS, GROQ_FALLBACK_MODEL,
+    GROQ_MAX_RETRIES, GROQ_MODEL, MAX_TITLE_LEN,
+    SUMMARIZE_CHUNK_CHARS, SUMMARIZE_FINAL_TOKENS, SUMMARIZE_PARTIAL_TOKENS,
 )
 from services.llm import groq_client
 
-
-# ─── Хештеги ──────────────────────────────────────────────
 
 def generate_hashtags(expert_name, summary):
     prompt = f"""3 хештега (#Слово через пробел).
@@ -31,8 +30,6 @@ def generate_hashtags(expert_name, summary):
     except Exception:
         return ""
 
-
-# ─── Нейтрализация заголовка ──────────────────────────────
 
 def _is_title_neutral(title):
     if not title:
@@ -89,42 +86,61 @@ def neutralize_title(video_title):
         return _simple_neutralize(video_title)
 
 
-# ─── Форматирование заголовка для публикации ─────────────
-
 def _format_title(title, max_len=MAX_TITLE_LEN):
-    """HTML-safe форматирование. Экранирует пользовательские символы."""
     if not title:
         return ""
-    title = html.unescape(title).strip()
+    title = html.unescape(title)
     if len(title) > max_len:
         title = title[:max_len - 1] + "…"
-    return f"<b>{html.escape(title.upper())}</b>"
+    return f"<b>{title.upper()}</b>"
 
-
-# ─── Groq с ретраями ──────────────────────────────────────
 
 def _call_groq_with_retry(messages, temperature, max_tokens, label=""):
-    for attempt in range(GROQ_MAX_RETRIES):
-        try:
-            return groq_client.chat.completions.create(
-                messages=messages, model=GROQ_MODEL,
-                temperature=temperature, max_tokens=max_tokens,
-            )
-        except Exception as e:
-            err = str(e).lower()
-            if ("429" in err or "rate_limit" in err or "rate limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
-                wait = 30 * (2 ** attempt)
-                m = re.search(r'try again in ([\d.]+)s', str(e))
-                if m:
-                    wait = max(float(m.group(1)) + 2, 5)
-                print(f"      ⏸  429 [{label}], {wait:.0f}с")
-                time.sleep(wait)
-                continue
-            raise
-    raise RuntimeError("Groq: 429")
+    """
+    TPM (tokens per minute) → retry с паузой на текущей модели.
+    TPD (tokens per day) → переключение на GROQ_FALLBACK_MODEL.
+    Если все модели исчерпали TPD — RuntimeError (worker пометит как error).
+    """
+    models = [GROQ_MODEL]
+    if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
+        models.append(GROQ_FALLBACK_MODEL)
 
+    last_err = None
+    for mi, model in enumerate(models):
+        is_last = (mi == len(models) - 1)
+        for attempt in range(GROQ_MAX_RETRIES):
+            try:
+                return groq_client.chat.completions.create(
+                    messages=messages, model=model,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+            except Exception as e:
+                last_err = e
+                err = str(e).lower()
 
-# ─── Фикс 413: безопасный размер входа ────────────────────
+                # TPD — переключаемся на следующую модель
+                if "tokens per day" in err or "tpd" in err:
+                    short = model.split("/")[-1]
+                    if not is_last:
+                        next_short = models[mi + 1].split("/")[-1]
+                        print(f"      🔄 TPD [{label}] {short} → {next_short}")
+                        break
+                    raise RuntimeError(f"TPD exhausted on all models (last: {short}): {e}")
+
+                # TPM — retry с паузой
+                if ("429" in err or "rate_limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
+                    wait = 30 * (2 ** attempt)
+                    m = re.search(r'try again in ([\d.]+)s', str(e))
+                    if m:
+                        wait = max(float(m.group(1)) + 2, 5)
+                    print(f"      ⏸  429 [TPM {label}], {wait:.0f}с (попытка {attempt+1}/{GROQ_MAX_RETRIES})")
+                    time.sleep(wait)
+                    continue
+
+                raise
+
+    raise RuntimeError(f"Groq: exhausted all models: {last_err}")
+
 
 _SAFE_INPUT_CHARS = 14000
 _FALLBACK_INPUT_CHARS = 7000
@@ -158,7 +174,7 @@ def _summarize_chunk(text, is_final):
 ---
 
 Выжимка:"""
-        max_tokens = 4000
+        max_tokens = SUMMARIZE_FINAL_TOKENS
     else:
         prompt_template = """Тезисы, аргументы, прогнозы. Кратко.
 Атрибуция: «эксперт утверждает». Списки — •.
@@ -168,7 +184,7 @@ def _summarize_chunk(text, is_final):
 ---
 
 Выжимка:"""
-        max_tokens = 1000
+        max_tokens = SUMMARIZE_PARTIAL_TOKENS
 
     safe_text = text if len(text) <= _SAFE_INPUT_CHARS else text[:_SAFE_INPUT_CHARS]
     prompt = prompt_template.replace("{text}", safe_text)
@@ -196,11 +212,11 @@ def _summarize_chunk(text, is_final):
 def summarize_text(text):
     if not text.strip():
         raise ValueError("пустой текст")
-    CHUNK = 12000
+    CHUNK = SUMMARIZE_CHUNK_CHARS
     if len(text) <= CHUNK:
         return _summarize_chunk(text, is_final=True)
     chunks = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)]
-    print(f"📄 Map-Reduce: {len(chunks)} частей")
+    print(f"📄 Map-Reduce: {len(chunks)} частей (chunk={CHUNK}, final={SUMMARIZE_FINAL_TOKENS} tok)")
     partials = []
     for i, c in enumerate(chunks, 1):
         print(f"   {i}/{len(chunks)}...")
@@ -212,7 +228,6 @@ def summarize_text(text):
 
 
 def _check_context_errors(summary, original):
-    """Диагностика подмены контекста (Украина ↔ Россия). Логирует, не правит."""
     ukr = ["рада", "зеленск", "киев", "украин", "київ"]
     rus = ["дума", "путин", "кремл", "россий", "рф "]
     tl, sl = original.lower(), summary.lower()
