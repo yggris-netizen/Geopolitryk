@@ -1,19 +1,45 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 *.bak
+*.old
+.pytest_cache/
+.mypy_cache/
+
+# IDE
 .idea/
+
+# Секреты и переменные
 .env
-
-seen_videos.db
-*.db
 service_account.json
-
-audio.*
-audio.part*.m4a
 cookies.txt
 youtube-cookies.txt
+flatten.json
+bothost.json
+
+# БД
+seen_videos.db
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Временные файлы
+audio.*
+audio.part*.m4a
+*.log
+
+# Локальные артефакты (не для Git)
+bgutil-pot.exe
+yt-dlp.conf
+PROJECT_CONTEXT.md
 check_db.py
 cleanup_bortnik.py
-check_db.py
-cleanup_bortnik.py
+cleanup_experts_today.py
+clear_one.py
+key_help.py
+main.py
+News_agent.zip
+bot_v2026-10-23.py
