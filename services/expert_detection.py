@@ -1,4 +1,4 @@
-"""Определение эксперта(ов) по транскрипту, заголовку, описанию, LLM."""
+"""Определение эксперта(ов) по транскрипту, заголовку, описанию, LLM, NER."""
 
 import html
 import json
@@ -16,6 +16,18 @@ except ImportError:
     _MORPH = None
     MORPH_AVAILABLE = False
     print("⚠️  pymorphy3 не установлен")
+
+# ─── Natasha NER (опционально) ─────────────────────────────
+try:
+    from mawo_natasha import MAWODoc
+    from mawo_slovnet import NewsNERTagger
+    _NER_TAGGER = NewsNERTagger()
+    NATASHA_AVAILABLE = True
+    print("✅ Natasha NER OK")
+except ImportError:
+    _NER_TAGGER = None
+    NATASHA_AVAILABLE = False
+    print("⚠️  Natasha NER не установлен (используются только эвристики)")
 
 
 _SURNAME_SUFFIXES = (
@@ -37,9 +49,17 @@ _CAPS_BLACKLIST = {
     "ГОТОВЯТ", "СЛУЧИЛОСЬ", "НОВОЕ", "НОВОСТЬ", "ОБЗОР",
     "СРОЧНЫЙ", "ГЛАВНЫЙ", "МОЛНИЯ", "ПОСЛЕДНИЙ", "ШОКИРУЮЩИЙ",
     "ДУПЛО", "БЕЛОЧКИ", "ЗАМОРОЗКА", "ОТМОРОЗКА", "РАЗБУШЕВ",
-    "СДАВАТЬСЯ", "УСКОРИЛ", "ЯРОСТИ", "АГОНИИ",
+    "СД��ВАТЬСЯ", "УСКОРИЛ", "ЯРОСТИ", "АГОНИИ",
     "РЕВА", "РЕВ", "РЁВ",
 }
+
+_PROFESSION_MARKERS = (
+    "политолог", "политик", "экономист", "философ", "аналитик",
+    "журналист", "историк", "депутат", "эксперт", "военный",
+    "дипломат", "социолог", "публицист", "политтехнолог",
+    "разведчик", "офицер", "генерал", "полковник", "капитан",
+    "профессор", "доктор наук", "кандидат наук", "академик",
+)
 
 
 def _looks_like_surname(word: str) -> bool:
@@ -118,7 +138,6 @@ def _to_nominative(name: str) -> str:
 
 
 def _ensure_name_first(name: str) -> str:
-    """Меняет «Фамилия Имя» → «Имя Фамилия»."""
     if not name:
         return name
     words = name.split()
@@ -185,6 +204,57 @@ def _is_likely_person(name: str) -> bool:
         return False
     return True
 
+
+# ─── NER через Natasha ─────────────────────────────────────
+
+def _extract_persons_ner(text: str, max_chars: int = 4000) -> list[str]:
+    """Извлекает все PER-сущности из первых max_chars символов."""
+    if not NATASHA_AVAILABLE or not text:
+        return []
+    snippet = text[:max_chars]
+    try:
+        doc = MAWODoc(snippet)
+        doc.segment()
+        markup = _NER_TAGGER(doc.text)
+        doc.spans = markup.spans
+        persons = []
+        for span in doc.spans:
+            if span.type != "PER":
+                continue
+            # mawo_slovnet не заполняет span.text — извлекаем по start/stop
+            raw = snippet[span.start:span.stop]
+            name = _normalize_name(raw)
+            if _looks_like_person_name(name) or _is_likely_person(name):
+                persons.append(name)
+        seen = set()
+        unique = []
+        for p in persons:
+            key = p.lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(p)
+        return unique
+    except Exception as e:
+        print(f"      ⚠️  NER: {e}")
+        return []
+
+
+def _pick_best_person_ner(persons: list[str], channel_owner: str) -> str:
+    if not persons:
+        return ""
+    filtered = []
+    for p in persons:
+        if channel_owner and _is_owner_name(p, channel_owner):
+            continue
+        filtered.append(p)
+    if not filtered:
+        return ""
+    if len(filtered) == 1:
+        return filtered[0]
+    return max(filtered, key=len)
+
+
+# ─── Эвристики по тексту ───────────────────────────────────
 
 def _extract_name_from_description(description: str) -> str:
     if not description:
@@ -298,21 +368,13 @@ def _expand_surname_in_transcript(surname: str, transcript: str) -> str:
 def _extract_name_from_intro(transcript: str) -> str:
     intro = transcript[:3000]
     patterns = [
-        # 1. Обратный порядок: «Имя Фамилия на связи»
         r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)\s+на\s+связи',
-        # 2. «Имя Фамилия, эксперт / политолог / философ» (+определения)
         r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+),\s*(?:политический\s+|военный\s+|экономический\s+|финансовый\s+)?(?:философ|политолог|экономист|эксперт|аналитик|журналист|историк|депутат)',
-        # 3. «в гостях Имя Фамилия»
         r'в гостях\s+(?:у нас\s+)?(?:был[аи]?|стал[аи]?)?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
-        # 4. «наш/мой гость (сегодня) Имя Фамилия»
         r'(?:наш|мой)\s+гост[ья]\s+(?:сегодня\s+)?[-—:]?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
-        # 5. «на связи Имя Фамилия»
         r'на\s+связи\s+(?:был[аи]?)?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
-        # 6. «в эфире / в студии Имя Фамилия»
         r'(?:в\s+эфире|в\s+студии)\s+(?:был[аи]?)?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
-        # 7. «Имя Фамилия, политолог»
         r'([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+),?\s+(?:политолог|политик|экономист|журналист|эксперт|аналитик)',
-        # 8. «мой собеседник Имя Фамилия»
         r'мой\s+собеседник\s*[-—:]?\s*([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})',
     ]
     for pat in patterns:
@@ -323,6 +385,32 @@ def _extract_name_from_intro(transcript: str) -> str:
                 return cand
     return ""
 
+
+# ─── Эвристика профессии ───────────────────────────────────
+
+def _extract_profession_near_name(name: str, text: str, window: int = 200) -> str:
+    if not name or not text:
+        return ""
+    parts = name.split()
+    search_terms = parts[-1:] if len(parts) > 1 else parts
+    pos = -1
+    for term in search_terms:
+        idx = text.find(term)
+        if idx >= 0:
+            pos = idx
+            break
+    if pos < 0:
+        return ""
+    start = max(0, pos - window)
+    end = min(len(text), pos + window)
+    snippet = text[start:end].lower()
+    for marker in _PROFESSION_MARKERS:
+        if marker in snippet:
+            return marker
+    return ""
+
+
+# ─── Проверка владельца ────────────────────────────────────
 
 def _is_owner_name(name: str, channel_owner: str) -> bool:
     if not name or not channel_owner:
@@ -361,6 +449,8 @@ def _is_owner_name(name: str, channel_owner: str) -> bool:
                 return True
     return False
 
+
+# ─── LLM ───────────────────────────────────────────────────
 
 def _parse_experts_json(raw: str) -> list[dict]:
     raw = re.sub(r'^```(?:json)?\s*', '', raw)
@@ -413,8 +503,8 @@ def _llm_detect_experts(video_title, transcript, channel_name, channel_type, cha
 ПРАВИЛА:
 1. Эксперт — гость, НЕ ведущий. Владельца канала («{channel_owner or ''}») НЕ включай.
 2. Включай ВСЕХ гостей: 1, 2 или 3.
-3. name — ТОЛЬКО в формате «Имя Фамилия» (например, «Юрий Воскресенский», НЕ «Воскресенский Юрий»), в ИМЕНИТЕЛЬНОМ падеже.
-4. bio — специализация из транскрипта (политолог, экономист, военный аналитик, депутат и т.п.). Коротко, до 40 символов. Если не определить — пустая строка.
+3. name — ТОЛЬКО в формате «Имя Фамилия», в ИМЕНИТЕЛЬНОМ падеже.
+4. bio — специализация/должность из текста (политолог, экономист, военный аналитик, философ, депутат, эксперт и т.п.). Ищи в тексте фразы вроде «Сергей, политический философ» или «эксперт из Беларуси». Если профессия не упоминается — пустая строка.
 5. Если в видео только ведущий без гостей — верни [].
 6. Если не определить — [].
 
@@ -442,9 +532,22 @@ JSON:"""
         return []
 
 
+# ─── Главная функция ───────────────────────────────────────
+
 def detect_experts(video_title, transcript, description="",
                    channel_name="", channel_type="media", channel_owner=""):
-    """Возвращает [{name, bio, role}]."""
+    print("   Шаг 0: NER (Natasha)...")
+    ner_persons = _extract_persons_ner(transcript, max_chars=4000)
+    if ner_persons:
+        print(f"      Найдено PER: {ner_persons[:5]}")
+        best = _pick_best_person_ner(ner_persons, channel_owner)
+        if best:
+            best = _finalize_name(best)
+            print(f"      ✅ {best}")
+            bio = generate_expert_bio(best, transcript)
+            return [{"name": best, "bio": bio, "role": "guest"}]
+    print("      ⚠️  NER не дал кандидата")
+
     print("   Шаг 1: интро...")
     name = _extract_name_from_intro(transcript)
     if name:
@@ -499,7 +602,7 @@ def detect_experts(video_title, transcript, description="",
                 continue
             if channel_type == "author" and _is_owner_name(n, channel_owner):
                 continue
-            bio = generate_expert_bio(n, transcript) or g.get("bio", "")
+            bio = generate_expert_bio(n, transcript) or g.get("bio", "") or _extract_profession_near_name(n, transcript)
             result.append({"name": n, "bio": bio, "role": "guest"})
         if result:
             print(f"      ✅ гостей: {len(result)}")
@@ -536,4 +639,4 @@ def generate_expert_bio(expert_name, transcript):
     fw = key.split()[0] if key.split() else ""
     if fw in KNOWN_EXPERT_BIOS:
         return KNOWN_EXPERT_BIOS[fw]
-    return ""
+    return _extract_profession_near_name(expert_name, transcript)

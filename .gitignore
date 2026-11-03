@@ -42,4 +42,5 @@ clear_one.py
 key_help.py
 main.py
 News_agent.zip
-bot_v2026-10-23.py
+bot_v2026-10-23.pytest_ner.py
+test_ner2.py
