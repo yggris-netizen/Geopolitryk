@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import (
     CHANNELS_TO_WATCH, CHECK_INTERVAL_HOURS, HEARTBEAT_HOURS,
-    MAX_VIDEOS_PER_CHANNEL_PER_CHECK, MAX_REPEAT_EXPERTS_PER_CYCLE,
+    MAX_VIDEOS_PER_CHANNEL_PER_CHECK,
     OWNER_USER_ID, TRANSCRIPTS_CACHE_DAYS, YOUTUBE_DAILY_QUOTA,
 )
 from db.queue import (
@@ -57,9 +57,7 @@ async def check_all_channels(shutdown_event=None):
         for e in sorted(seen_experts):
             print(f"   • {e}")
 
-    repeat_count = {}
     added = 0
-    skipped = 0
 
     for ch in channels_shuffled:
         if shutdown_event is not None and shutdown_event.is_set():
@@ -90,17 +88,9 @@ async def check_all_channels(shutdown_event=None):
                 if _is_owner_name(prelim, owner):
                     prelim = ""
 
+            # Запрет на повторы снят: все задачи с одинаковым приоритетом
             is_rep = prelim and prelim in seen_experts
             prio = 0 if is_rep else 5
-
-            if is_rep:
-                cnt = repeat_count.get(prelim, 0)
-                if cnt >= MAX_REPEAT_EXPERTS_PER_CYCLE:
-                    print(f"   ⏭  лимит ({prelim}): {v['title'][:50]}")
-                    _mark_video_processed(v["video_id"])
-                    skipped += 1
-                    continue
-                repeat_count[prelim] = cnt + 1
 
             tid = _add_task_to_queue(
                 video_url=v["url"], video_id=v["video_id"],
@@ -119,7 +109,7 @@ async def check_all_channels(shutdown_event=None):
                 print(f"   ⏭  в очереди: {v['title'][:60]}")
 
     q = _quota_info()
-    print(f"\n📊 Автоцикл: +{added}, пропущено {skipped}")
+    print(f"\n📊 Автоцикл: +{added}")
     print(f"📊 Квота YouTube: {q['count']}/{YOUTUBE_DAILY_QUOTA} ({q['by_op']})")
     print(f"{'=' * 60}")
 

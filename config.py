@@ -2,6 +2,11 @@
 Централизованная конфигурация бота.
 Все константы, env-переменные, классификация ошибок.
 Не зависит от aiogram/groq — только stdlib.
+
+Версия: v2.0.1-local (03.11.2026)
+- Убран UKRLIFETV из CHANNELS_TO_WATCH
+- HOURS_BACK=24 (было 12)
+- MAX_REPEAT_EXPERTS_PER_CYCLE=999 (запрет на повторы снят)
 """
 
 import json
@@ -30,8 +35,7 @@ GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 
 # Основная модель (8000 TPM, 200K TPD)
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-# Fallback при исчерпании TPD на основной модели.
-# У каждой модели СВОЙ TPD, поэтому каскад даёт ~2x дневного лимита.
+# Fallback при исчерпании TPD на основной модели
 GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
@@ -70,13 +74,13 @@ else:
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
+# UKRLIFETV убран (v2.0.1-local)
 CHANNELS_TO_WATCH = [
     {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест", "type": "author", "owner": "Александр Шелест"},
     {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник",   "type": "author", "owner": "Руслан Бортник"},
     {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live",       "type": "author", "owner": "Виталий Дикий"},
     {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС",         "type": "media"},
     {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online",  "type": "media"},
-    {"id": "UCxkdtxa54kQLRmmWaBH0K2w", "name": "UKRLIFETV",        "type": "media"},
 ]
 
 TEST_VIDEO_URL = ""
@@ -88,13 +92,15 @@ DB_PATH = os.getenv("DB_PATH", "seen_videos.db")
 CHECK_INTERVAL_HOURS = 3
 WORKER_POLL_INTERVAL = 5
 
-HOURS_BACK = int(os.getenv("HOURS_BACK", "12"))
+# 24 часа (было 12)
+HOURS_BACK = int(os.getenv("HOURS_BACK", "24"))
 DAYS_BACK = HOURS_BACK / 24
 
 MIN_VIDEO_DURATION_SECONDS = 180
 MAX_VIDEO_DURATION_SECONDS = 5400
 MAX_VIDEOS_PER_CHANNEL_PER_CHECK = int(os.getenv("MAX_VIDEOS_PER_CHANNEL_PER_CHECK", "5"))
-MAX_REPEAT_EXPERTS_PER_CYCLE = 2
+# Запрет на одного эксперта на разных каналах снят (было 2)
+MAX_REPEAT_EXPERTS_PER_CYCLE = 999
 MIN_TRANSCRIPT_CHARS = 100
 
 YOUTUBE_VIDEOS_CACHE_TTL = 1800
@@ -113,24 +119,16 @@ MAX_PREDICTION_HORIZON_YEARS = 5
 
 
 # ─── Параметры Groq (TPM = 8000/мин, TPD = 200K/день) ─────
-# Chunk для Map-Reduce: 16000 символов ≈ 2-3 чанка для 40K транскрипта
-# (было 12000 → 4-5 чанков → лишний расход токенов).
 SUMMARIZE_CHUNK_CHARS = int(os.getenv("SUMMARIZE_CHUNK_CHARS", "16000"))
-# Выходных токенов для финальной суммаризации
 SUMMARIZE_FINAL_TOKENS = int(os.getenv("SUMMARIZE_FINAL_TOKENS", "3000"))
-# Выходных токенов для промежуточных чанков
 SUMMARIZE_PARTIAL_TOKENS = int(os.getenv("SUMMARIZE_PARTIAL_TOKENS", "1000"))
 
-# Пауза между чанками Map-Reduce (секунды)
 GROQ_DELAY_BETWEEN_CHUNKS = int(os.getenv("GROQ_DELAY_BETWEEN_CHUNKS", "20"))
-# Пауза перед извлечением прогнозов (секунды)
 GROQ_PREDICTIONS_PAUSE = int(os.getenv("GROQ_PREDICTIONS_PAUSE", "45"))
-# Максимум попыток при 429 на одной модели
 GROQ_MAX_RETRIES = int(os.getenv("GROQ_MAX_RETRIES", "5"))
 
 DISPLAY_TIMEZONE_OFFSET = 3
 
-# ─── Кеш транскриптов ─────────────────────────────────────
 TRANSCRIPTS_CACHE_DAYS = int(os.getenv("TRANSCRIPTS_CACHE_DAYS", "7"))
 
 
