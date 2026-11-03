@@ -49,7 +49,7 @@ _CAPS_BLACKLIST = {
     "ГОТОВЯТ", "СЛУЧИЛОСЬ", "НОВОЕ", "НОВОСТЬ", "ОБЗОР",
     "СРОЧНЫЙ", "ГЛАВНЫЙ", "МОЛНИЯ", "ПОСЛЕДНИЙ", "ШОКИРУЮЩИЙ",
     "ДУПЛО", "БЕЛОЧКИ", "ЗАМОРОЗКА", "ОТМОРОЗКА", "РАЗБУШЕВ",
-    "СД��ВАТЬСЯ", "УСКОРИЛ", "ЯРОСТИ", "АГОНИИ",
+    "СДАВАТЬСЯ", "УСКОРИЛ", "ЯРОСТИ", "АГОНИИ",
     "РЕВА", "РЕВ", "РЁВ",
 }
 
@@ -59,6 +59,15 @@ _PROFESSION_MARKERS = (
     "дипломат", "социолог", "публицист", "политтехнолог",
     "разведчик", "офицер", "генерал", "полковник", "капитан",
     "профессор", "доктор наук", "кандидат наук", "академик",
+)
+
+# Ложные PER, которые NER может спутать с именем
+_FALSE_PER_MARKERS = (
+    "республик", "федераци", "российск", "белорус", "украин",
+    "министерств", "правительств", "президент", "государств",
+    "област", "город", "район", "канал", "телеканал", "стран",
+    "вооруженн", "сил", "армии", "совет", "союз", "парти",
+    "движени", "организаци", "компани", "корпораци", "банк",
 )
 
 
@@ -221,7 +230,6 @@ def _extract_persons_ner(text: str, max_chars: int = 4000) -> list[str]:
         for span in doc.spans:
             if span.type != "PER":
                 continue
-            # mawo_slovnet не заполняет span.text — извлекаем по start/stop
             raw = snippet[span.start:span.stop]
             name = _normalize_name(raw)
             if _looks_like_person_name(name) or _is_likely_person(name):
@@ -240,18 +248,29 @@ def _extract_persons_ner(text: str, max_chars: int = 4000) -> list[str]:
 
 
 def _pick_best_person_ner(persons: list[str], channel_owner: str) -> str:
+    """
+    Выбор лучшего кандидата из NER-результатов.
+    Приоритет:
+    1. Исключаем ведущего канала (channel_owner).
+    2. Исключаем ложные PER (республик, федераци, российск, ...).
+    3. Исключаем слишком длинные (4+ слова).
+    4. Берём ПЕРВОЕ подходящее (NER возвращает в порядке упоминания — первое обычно из интро).
+    """
     if not persons:
         return ""
     filtered = []
     for p in persons:
         if channel_owner and _is_owner_name(p, channel_owner):
             continue
+        p_low = p.lower()
+        if any(m in p_low for m in _FALSE_PER_MARKERS):
+            continue
+        if len(p.split()) > 3:
+            continue
         filtered.append(p)
     if not filtered:
         return ""
-    if len(filtered) == 1:
-        return filtered[0]
-    return max(filtered, key=len)
+    return filtered[0]
 
 
 # ─── Эвристики по тексту ───────────────────────────────────
