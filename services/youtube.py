@@ -350,6 +350,11 @@ def get_video_info_ytdlp(url: str) -> dict:
             'quiet': True,
             'skip_download': True,
             'cookiefile': COOKIEFILE,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['mweb', 'tv', 'web_safari'],
+                }
+            },
         }) as ydl:
             info = ydl.extract_info(url, download=False)
             upload_date = info.get("upload_date", "")

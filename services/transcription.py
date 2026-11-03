@@ -95,6 +95,11 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
         'quiet': False,
         'noplaylist': True,
         'cookiefile': COOKIEFILE,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['mweb', 'tv', 'web_safari'],
+            }
+        },
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
