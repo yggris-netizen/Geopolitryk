@@ -1,4 +1,9 @@
-"""Скачивание аудио и транскрибация (Groq Whisper или локально)."""
+"""Скачивание аудио и транскрибация (Groq Whisper или локально).
+
+Возвращает tuple[str, list[dict]]:
+  - str — плоский текст (для transcripts_cache, суммаризации, публикации)
+  - list[dict] — сегменты [{start, end, text}] (для transcripts_raw, Бот 3)
+"""
 
 import os
 import subprocess
@@ -111,7 +116,8 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
     return output_path
 
 
-def _transcribe_groq(audio_path: str, total_duration: float = 0) -> str:
+def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
+    """Возвращает (text, segments). segments = [{start, end, text}]."""
     file_size_mb = os.path.getsize(audio_path) / 1024 / 1024
     print(f"   📁 Размер: {file_size_mb:.1f} MB")
 
@@ -135,7 +141,10 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> str:
         chunks = [audio_path]
 
     print(f"   📤 Отправляю {len(chunks)} кусков в Groq...")
-    full_parts = []
+    full_text_parts = []
+    all_segments = []
+    offset_sec = 0.0
+
     for i, chunk in enumerate(chunks, 1):
         chunk_mb = os.path.getsize(chunk) / 1024 / 1024
         print(f"   [{i}/{len(chunks)}] {chunk_mb:.1f} MB...")
@@ -145,11 +154,22 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> str:
                     file=(os.path.basename(chunk), f),
                     model=GROQ_WHISPER_MODEL,
                     language=VIDEO_LANGUAGE,
-                    response_format="text",
+                    response_format="verbose_json",
                 )
-            text = (r.text if hasattr(r, "text") else str(r)).strip()
-            print(f"   ✅ {len(text)} символов")
-            full_parts.append(text)
+            # verbose_json возвращает r.text и r.segments
+            chunk_text = (getattr(r, "text", "") or "").strip()
+            chunk_segments = getattr(r, "segments", None) or []
+            print(f"   ✅ {len(chunk_text)} символов, {len(chunk_segments)} сегментов")
+            full_text_parts.append(chunk_text)
+            for seg in chunk_segments:
+                all_segments.append({
+                    "start": float(seg.get("start", 0)) + offset_sec
+                    if isinstance(seg, dict) else float(seg.start) + offset_sec,
+                    "end": float(seg.get("end", 0)) + offset_sec
+                    if isinstance(seg, dict) else float(seg.end) + offset_sec,
+                    "text": (seg.get("text", "") if isinstance(seg, dict) else seg.text or "").strip(),
+                })
+            offset_sec += chunk_seconds_for(chunk, total_duration)
         except Exception as e:
             print(f"   ❌ Groq chunk {i}: {e}")
             raise
@@ -160,37 +180,58 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> str:
                 except Exception:
                     pass
 
-    full = " ".join(full_parts)
+    full = " ".join(full_text_parts).strip()
     if os.path.exists(audio_path):
         try:
             os.remove(audio_path)
         except Exception:
             pass
-    return full
+    return full, all_segments
 
 
-def _transcribe_local(audio_path: str, total_duration: float = 0) -> str:
+def chunk_seconds_for(chunk_path: str, total_duration: float) -> float:
+    """Возвращает длительность куска в секундах (для смещения сегментов)."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", chunk_path],
+            check=True, capture_output=True, timeout=10, text=True,
+        )
+        return float(probe.stdout.strip())
+    except Exception:
+        return float(GROQ_MAX_CHUNK_SECONDS)
+
+
+def _transcribe_local(audio_path: str, total_duration: float = 0) -> tuple:
+    """Возвращает (text, segments). segments = [{start, end, text}]."""
     if _local_model is None:
         raise RuntimeError("локальный Whisper не инициализирован")
-    segments, _info = _local_model.transcribe(
+    segments_raw, _info = _local_model.transcribe(
         audio_path, beam_size=5, language=VIDEO_LANGUAGE, vad_filter=True,
         condition_on_previous_text=False,
         initial_prompt=("Это интервью на русском языке. Обсуждается геополитика, "
                         "политика, экономика, выборы, парламент, эксперты."),
     )
-    parts = []
-    for seg in segments:
-        parts.append(seg.text.strip())
-    full = " ".join(parts)
+    text_parts = []
+    segments = []
+    for seg in segments_raw:
+        text_parts.append(seg.text.strip())
+        segments.append({
+            "start": float(seg.start),
+            "end": float(seg.end),
+            "text": seg.text.strip(),
+        })
+    full = " ".join(text_parts).strip()
     if os.path.exists(audio_path):
         try:
             os.remove(audio_path)
         except Exception:
             pass
-    return full
+    return full, segments
 
 
-def transcribe_audio(audio_path: str, total_duration: float = 0) -> str:
+def transcribe_audio(audio_path: str, total_duration: float = 0) -> tuple:
+    """Возвращает (text, segments)."""
     if not os.path.exists(audio_path):
         raise FileNotFoundError(audio_path)
     if WHISPER_MODE == "groq":

@@ -20,6 +20,7 @@ from db.experts import _mark_expert_seen_today
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
 from db.transcripts import get_cached_transcript, save_cached_transcript
+from db.transcripts_raw import save_transcript_raw
 from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
 from services.summarization import (
@@ -35,9 +36,7 @@ from services.youtube import (
 
 _bot = None
 
-# Отключаем превью ссылок во всех send_message:
-# без этого Telegram добавляет карточку-превью YouTube в самый низ,
-# даже после «Сгенерировано автоматически».
+# Отключаем превью ссылок во всех send_message
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
@@ -242,28 +241,33 @@ async def process_and_publish(video_url, video_title="", video_description="",
             extra = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             published_at = extra.get("published_at", "")
 
-        transcript = ""
+        # === КЕШ ТРАНСКРИПТОВ (плоский текст) ===
+        transcript_text = ""
         if vid:
-            transcript = get_cached_transcript(vid)
-            if transcript:
-                print(f"💾 транскрипт из кеша ({len(transcript)} символов) — пропускаю скачивание")
+            transcript_text = get_cached_transcript(vid)
+            if transcript_text:
+                print(f"💾 транскрипт из кеша ({len(transcript_text)} символов) — пропускаю скачивание")
 
-        if not transcript:
+        transcript_segments = []
+
+        if not transcript_text:
             print("📥 Шаг 1/4: Скачивание...")
             audio_file = await asyncio.to_thread(download_audio, video_url)
             print("✅ Скачано\n")
 
             print("🎤 Шаг 2/4: Транскрибация...")
-            transcript = await asyncio.to_thread(transcribe_audio, audio_file, duration)
+            transcript_text, transcript_segments = await asyncio.to_thread(
+                transcribe_audio, audio_file, duration
+            )
             audio_file = None
 
-            if vid and transcript:
-                save_cached_transcript(vid, transcript)
-                print(f"💾 транскрипт сохранён в кеш ({len(transcript)} символов)")
+            if vid and transcript_text:
+                save_cached_transcript(vid, transcript_text)
+                print(f"💾 транскрипт сохранён в кеш ({len(transcript_text)} символов)")
 
-        transcript_len = len(transcript.strip())
+        transcript_len = len(transcript_text.strip())
         print(f"📊 Длина транскрипта: {transcript_len}")
-        print(f"📊 Начало: {transcript[:200]!r}")
+        print(f"📊 Начало: {transcript_text[:200]!r}")
 
         if transcript_len < MIN_TRANSCRIPT_CHARS:
             return False, f"transcript_too_short: {transcript_len}"
@@ -284,7 +288,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         print("🔍 Эксперт(ы)...")
         experts = detect_experts(
-            video_title, transcript, description=video_description,
+            video_title, transcript_text, description=video_description,
             channel_name=channel_name, channel_type=channel_type,
             channel_owner=channel_owner,
         )
@@ -294,9 +298,24 @@ async def process_and_publish(video_url, video_title="", video_description="",
             print(f"   {mark} {e['name']}{bio}")
         print()
 
+        # === СОХРАНЕНИЕ СЫРОГО ТРАНСКРИПТА ДЛЯ БОТА 3 ===
+        if vid and transcript_segments:
+            experts_str_for_raw = _experts_as_string(experts)
+            save_transcript_raw(
+                video_id=vid,
+                interview_id=None,
+                expert_name=experts_str_for_raw,
+                source_url=video_url,
+                segments=transcript_segments,
+                language="ru",
+                duration_sec=int(duration or 0),
+                schema_version=1,
+            )
+            print(f"💾 transcripts_raw сохранён ({len(transcript_segments)} сегментов)\n")
+
         print("🧠 Шаг 3/4: Суммаризация...")
-        summary = summarize_text(transcript)
-        summary = _check_context_errors(summary, transcript)
+        summary = summarize_text(transcript_text)
+        summary = _check_context_errors(summary, transcript_text)
         print("✅ Готово\n")
 
         print("📤 Шаг 4/4: Отправка...")
@@ -320,7 +339,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 print(f"⏸  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами (восстановление TPM Groq)...")
                 await asyncio.sleep(GROQ_PREDICTIONS_PAUSE)
                 print("📊 Прогнозы...")
-                preds = extract_predictions(transcript, experts_str)
+                preds = extract_predictions(transcript_text, experts_str)
                 if preds:
                     saved = _save_predictions(vid, experts_str, channel_name, preds)
                     print(f"✅ Сохранено {saved}")

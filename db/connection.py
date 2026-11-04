@@ -20,11 +20,6 @@ def _cleanup_temp_files():
         pass
 
 
-def _column_exists(conn, table: str, column: str) -> bool:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(r[1] == column for r in rows)
-
-
 def _init_db():
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir:
@@ -33,17 +28,7 @@ def _init_db():
         except Exception:
             pass
 
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-
-    # WAL позволяет читать во время записи (воркер + планировщик + Telegram-хендлеры)
-    # и снижает вероятность "database is locked". PRAGMA сохраняется между запусками.
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=10000")
-    except Exception as e:
-        print(f"⚠️  PRAGMA WAL: {e}")
-
+    conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS processed_videos ("
         "video_id TEXT PRIMARY KEY, "
@@ -86,7 +71,7 @@ def _init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_date ON video_summaries(processed_at)")
 
-    # ─── Кеш транскриптов ──────────────────────────────────
+    # ─── Кеш транскриптов (плоский текст, для суммаризации) ─
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transcripts_cache (
             video_id TEXT PRIMARY KEY,
@@ -95,6 +80,24 @@ def _init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_date ON transcripts_cache(cached_at)")
+
+    # ─── Сырые сегменты транскриптов (для Бота 3) ──────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transcripts_raw (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id TEXT UNIQUE NOT NULL,
+            interview_id TEXT,
+            expert_name TEXT,
+            source_url TEXT,
+            transcript_json TEXT NOT NULL,
+            language TEXT,
+            duration_sec INTEGER,
+            schema_version INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_raw_video ON transcripts_raw(video_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_raw_expert ON transcripts_raw(expert_name)")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS task_queue (
@@ -118,13 +121,31 @@ def _init_db():
         )
     """)
 
-    if not _column_exists(conn, "task_queue", "video_published_at"):
+    # ─── Миграции для task_queue ───────────────────────────
+    try:
+        conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
+    except sqlite3.OperationalError:
         conn.execute("ALTER TABLE task_queue ADD COLUMN video_published_at TEXT")
         print("🔄 Миграция: добавлена колонка video_published_at")
 
-    if not _column_exists(conn, "task_queue", "next_retry_at"):
+    try:
+        conn.execute("SELECT next_retry_at FROM task_queue LIMIT 1")
+    except sqlite3.OperationalError:
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
         print("🔄 Миграция: добавлена колонка next_retry_at")
+
+    # ─── Миграции для predictions (для Бота 3) ─────────────
+    try:
+        conn.execute("SELECT source_url FROM predictions LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE predictions ADD COLUMN source_url TEXT")
+        print("🔄 Миграция: добавлена колонка predictions.source_url")
+
+    try:
+        conn.execute("SELECT fact_check_date FROM predictions LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE predictions ADD COLUMN fact_check_date TIMESTAMP")
+        print("🔄 Миграция: добавлена колонка predictions.fact_check_date")
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_status ON task_queue(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority DESC, created_at)")
