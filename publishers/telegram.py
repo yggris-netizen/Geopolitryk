@@ -4,8 +4,9 @@ Voice fingerprinting:
 1. Скачали аудио → транскрибация.
 2. Voice identification → кластеры.
 3. detect_experts → experts + unknown.
-4. Незнакомые → pending_voices + уведомление с [✅ Спикер] [⏭ Пропустить].
-5. Публикация: «Спикеры: A, B» + «КАНАЛ: <name>» (если есть).
+4. Незнакомые → pending_voices + уведомление с [✅ Спикер] [⏭ Пропустить]
+   (+ блок «Уже распознаны», чтобы не размечать повторно).
+5. Публикация: «СПИКЕРЫ: A, B» (уникальные имена, без дубликатов) + «КАНАЛ».
 """
 
 import asyncio
@@ -70,11 +71,20 @@ def _looks_truncated_title(title: str) -> bool:
     return False
 
 
+def _unique_names(experts: list[dict]) -> list[str]:
+    """Уникальные имена из experts (без дубликатов, порядок сохраняется)."""
+    seen = set()
+    result = []
+    for e in experts:
+        name = (e.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result
+
+
 def _speakers_block(experts: list[dict]) -> str:
-    """Формат: «Спикеры: A, B» или «Спикер: A». Если пусто — «Спикеры: не определены»."""
-    if not experts:
-        return "<b>СПИКЕРЫ</b>\nне определены"
-    names = [e["name"] for e in experts if e.get("name")]
+    names = _unique_names(experts)
     if not names:
         return "<b>СПИКЕРЫ</b>\nне определены"
     if len(names) == 1:
@@ -83,9 +93,8 @@ def _speakers_block(experts: list[dict]) -> str:
 
 
 def _experts_as_string(experts: list[dict]) -> str:
-    if not experts:
-        return "Неизвестный спикер"
-    return ", ".join(e["name"] for e in experts if e.get("name")) or "Неизвестный спикер"
+    names = _unique_names(experts)
+    return ", ".join(names) if names else "Неизвестный спикер"
 
 
 async def send_expert_post(video_url, video_title, experts, channel_name, summary,
@@ -174,8 +183,12 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
 
 
 async def notify_owner_about_unknown(video_url, video_title, channel_name,
-                                      unknown: list, video_id: str):
-    """Уведомляет владельца о незнакомых голосах с inline-кнопками."""
+                                      unknown: list, video_id: str,
+                                      experts: list = None):
+    """Уведомляет владельца о незнакомых голосах.
+
+    experts — уже распознанные (уникальные имена для блока «Уже распознаны»).
+    """
     if not unknown:
         return
     if not _bot:
@@ -202,7 +215,10 @@ async def notify_owner_about_unknown(video_url, video_title, channel_name,
         return
 
     print(f"📤 Уведомление владельцу о {len(pending_list)} незнакомых голосах...")
-    text, keyboard = build_unknown_notification(video_url, video_title, pending_list)
+    text, keyboard = build_unknown_notification(
+        video_url, video_title, pending_list,
+        known_experts=experts or [],
+    )
     try:
         await _bot.send_message(
             chat_id=OWNER_USER_ID, text=text,
@@ -335,7 +351,8 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         if unknown:
             await notify_owner_about_unknown(
-                video_url, display_title, channel_name, unknown, vid
+                video_url, display_title, channel_name, unknown, vid,
+                experts=experts,
             )
 
         if vid and transcript_segments:

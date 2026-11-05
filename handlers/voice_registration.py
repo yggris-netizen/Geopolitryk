@@ -1,6 +1,8 @@
 """FSM-хендлер для разметки незнакомых голосов.
 
 Уведомление:
+✅ Уже распознаны: A, B (если есть)
+🎤 Незнакомые голоса: ...
 [✅ Спикер] [⏭ Пропустить]
 
 При «Спикер» → FSM: только ФИО → сохранить в voice_profiles (role="guest").
@@ -32,15 +34,28 @@ def _is_owner(user_id: int) -> bool:
 
 
 def build_unknown_notification(video_url: str, video_title: str,
-                                pending_list: list) -> tuple:
-    """Текст + inline-кнопки: [✅ Спикер] [⏭ Пропустить] для каждого."""
+                                pending_list: list,
+                                known_experts: list = None) -> tuple:
+    """Текст + inline-кнопки.
+
+    known_experts: [{"name": "..."}] — уже распознанные в этом видео.
+    pending_list: [{"id", "speaker_id", "duration_sec"}] — незнакомые.
+    """
     lines = [
         "🎤 <b>Незнакомые голоса</b>",
         f"📺 {video_title[:80]}",
         f"🔗 {video_url}",
-        "",
-        "Разметьте каждый голос:",
     ]
+
+    # Блок «Уже распознаны» — чтобы не размечать повторно
+    if known_experts:
+        names = [e["name"] for e in known_experts if e.get("name")]
+        if names:
+            lines.append("")
+            lines.append(f"✅ <b>Уже распознаны:</b> {', '.join(names)}")
+
+    lines.append("")
+    lines.append("Разметьте каждый незнакомый голос:")
     for i, p in enumerate(pending_list, 1):
         dur = p.get("duration_sec", 0)
         spk = p.get("speaker_id") or "?"
@@ -62,7 +77,6 @@ def build_unknown_notification(video_url: str, video_title: str,
 
 @router.callback_query(F.data.startswith("voice:"))
 async def on_voice_role(callback: CallbackQuery, state: FSMContext):
-    # answer() ПЕРВЫМ (лимит Telegram 15 сек)
     if not _is_owner(callback.from_user.id):
         await callback.answer("⛔ Только владелец", show_alert=True)
         return
