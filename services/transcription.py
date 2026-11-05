@@ -1,12 +1,4 @@
-"""Скачивание аудио и транскрибация (Groq Whisper или локально).
-
-Возвращает tuple[str, list[dict]]:
-  - str — плоский текст (для transcripts_cache, суммаризации, публикации)
-  - list[dict] — сегменты [{start, end, text}] (для transcripts_raw, Бот 3)
-
-ВАЖНО: audio_file НЕ удаляется внутри — удаление делает publishers/telegram.py
-после диаризации.
-"""
+"""Скачивание аудио и транскрибация (Groq Whisper или локально)."""
 
 import os
 import subprocess
@@ -21,12 +13,17 @@ from services.llm import groq_client
 
 COOKIEFILE = "/app/data/cookies.txt" if os.path.exists("/app/data/cookies.txt") else "cookies.txt"
 
+
+class CookiesExpiredError(Exception):
+    """Cookies протухли или YouTube блокирует скачивание (Sign in to confirm / 403)."""
+    pass
+
+
 _local_model = None
 if WHISPER_MODE == "local":
     print(f"\nЗагружаю локальный Whisper '{WHISPER_MODEL_SIZE}'...")
     try:
         from faster_whisper import WhisperModel
-
         _local_model = WhisperModel(
             WHISPER_MODEL_SIZE, device="cpu", compute_type="int8",
             cpu_threads=1, num_workers=1,
@@ -86,6 +83,17 @@ def _split_audio(src: str, chunk_seconds: int) -> list:
     return chunks
 
 
+def _is_cookies_error(err_text: str) -> bool:
+    """Проверяет, похоже ли сообщение об ошибке на проблему с cookies / блокировкой."""
+    e = (err_text or "").lower()
+    return (
+        "sign in to confirm" in e
+        or "http error 403" in e
+        or "cookies" in e and ("expired" in e or "протух" in e)
+        or "this video is unavailable" in e and "cookies" in e
+    )
+
+
 def download_audio(url: str, output_path: str = "audio.mp3") -> str:
     base = os.path.splitext(output_path)[0]
     for ext in (".mp3", ".m4a", ".webm", ".opus", ".mp4", ".ogg", ".wav", ".aac", ".flac"):
@@ -114,16 +122,18 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
             'preferredquality': '64',
         }],
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except Exception as e:
+        if _is_cookies_error(str(e)):
+            raise CookiesExpiredError(f"cookies_expired: {e}")
+        raise
     return output_path
 
 
 def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
-    """Возвращает (text, segments). segments = [{start, end, text}].
-
-    ВАЖНО: audio_path НЕ удаляется здесь — это делает publishers после диаризации.
-    """
+    """Возвращает (text, segments). segments = [{start, end, text}]."""
     file_size_mb = os.path.getsize(audio_path) / 1024 / 1024
     print(f"   📁 Размер: {file_size_mb:.1f} MB")
 
@@ -188,7 +198,6 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
                     pass
 
     full = " ".join(full_text_parts).strip()
-    # audio_path НЕ удаляем — это делает publishers после диаризации
     return full, all_segments
 
 

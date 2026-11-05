@@ -13,3 +13,4 @@ apscheduler
 pymorphy3
 python-dotenv
 psutil
+tavily-python

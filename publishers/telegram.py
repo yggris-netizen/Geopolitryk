@@ -1,18 +1,14 @@
 """Публикация выжимки в Telegram-канал + пайплайн обработки видео.
 
-Voice fingerprinting:
-1. Скачали аудио → транскрибация.
-2. Voice identification → кластеры.
-3. detect_experts → experts + unknown.
-4. Незнакомые → pending_voices + уведомление с [✅ Спикер] [⏭ Пропустить]
-   (+ блок «Уже распознаны», чтобы не размечать повторно).
-5. Публикация: «СПИКЕРЫ: A, B» (уникальные имена, без дубликатов) + «КАНАЛ».
+Voice fingerprinting + фильтрация шума + дедупликация имён.
+Уведомление владельца при протухании cookies (не чаще 1 раза в час).
 """
 
 import asyncio
 import os
 import re
 import sys
+import time
 import traceback
 
 from aiogram.enums import ParseMode
@@ -38,7 +34,9 @@ from services.summarization import (
     generate_hashtags, neutralize_title, summarize_text,
     _check_context_errors, _format_title,
 )
-from services.transcription import download_audio, transcribe_audio
+from services.transcription import (
+    CookiesExpiredError, download_audio, transcribe_audio,
+)
 from services.voice_identification import (
     assign_speakers_to_segments, build_speaker_transcript, identify_speakers,
 )
@@ -51,6 +49,10 @@ from services.youtube import (
 _bot = None
 
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+# Дедупликация алертов о cookies: не чаще 1 раза в час
+_LAST_COOKIES_ALERT_TS = 0.0
+_COOKIES_ALERT_INTERVAL_SEC = 3600
 
 
 def set_bot(bot_instance):
@@ -95,6 +97,37 @@ def _speakers_block(experts: list[dict]) -> str:
 def _experts_as_string(experts: list[dict]) -> str:
     names = _unique_names(experts)
     return ", ".join(names) if names else "Неизвестный спикер"
+
+
+async def _notify_owner_text(text: str) -> None:
+    """Простое уведомление владельцу (для алертов, не для разметки)."""
+    if not _bot:
+        return
+    try:
+        await _bot.send_message(
+            chat_id=OWNER_USER_ID, text=text,
+            link_preview_options=NO_PREVIEW,
+        )
+    except Exception as e:
+        print(f"⚠️  _notify_owner_text: {e}")
+
+
+async def _notify_cookies_expired(video_url: str, error_text: str) -> None:
+    """Уведомляет о протухших cookies (не чаще 1 раза в час)."""
+    global _LAST_COOKIES_ALERT_TS
+    now = time.time()
+    if now - _LAST_COOKIES_ALERT_TS < _COOKIES_ALERT_INTERVAL_SEC:
+        print(f"   ⏭ cookies-алерт пропущен (был недавно)")
+        return
+    _LAST_COOKIES_ALERT_TS = now
+    text = (
+        f"🍪 <b>Cookies протухли</b>\n\n"
+        f"Скачивание не работает: <code>{error_text[:200]}</code>\n\n"
+        f"🔗 {video_url}\n\n"
+        f"Обновите <code>cookies.txt</code> (Firefox → Get cookies.txt LOCALLY) "
+        f"и положите рядом с <code>bot.py</code>."
+    )
+    await _notify_owner_text(text)
 
 
 async def send_expert_post(video_url, video_title, experts, channel_name, summary,
@@ -185,10 +218,7 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
 async def notify_owner_about_unknown(video_url, video_title, channel_name,
                                       unknown: list, video_id: str,
                                       experts: list = None):
-    """Уведомляет владельца о незнакомых голосах.
-
-    experts — уже распознанные (уникальные имена для блока «Уже распознаны»).
-    """
+    """Уведомляет владельца о незнакомых голосах (с блоком «Уже распознаны»)."""
     if not unknown:
         return
     if not _bot:
@@ -288,7 +318,12 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         if not transcript_text:
             print("📥 Шаг 1/4: Скачивание...")
-            audio_file = await asyncio.to_thread(download_audio, video_url)
+            try:
+                audio_file = await asyncio.to_thread(download_audio, video_url)
+            except CookiesExpiredError as e:
+                print(f"   🍪 CookiesExpiredError: {e}")
+                await _notify_cookies_expired(video_url, str(e))
+                return False, "cookies_expired"
             print("✅ Скачано\n")
 
             print("🎤 Шаг 2/4: Транскрибация...")
@@ -383,6 +418,11 @@ async def process_and_publish(video_url, video_title="", video_description="",
         print("✅ Опубликовано\n")
 
         experts_str = _experts_as_string(experts)
+        # speaker_id — первый эксперт (главный гость/ведущий)
+        main_speaker = ""
+        if experts:
+            main_speaker = experts[0].get("speaker", "") or ""
+
         _save_summary(vid, experts_str, channel_name, summary,
                       video_title=display_title, video_published_at=published_at)
         for e in experts:
@@ -395,7 +435,10 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 print("📊 Прогнозы...")
                 preds = extract_predictions(transcript_text, experts_str)
                 if preds:
-                    saved = _save_predictions(vid, experts_str, channel_name, preds)
+                    saved = _save_predictions(
+                        vid, experts_str, channel_name, preds,
+                        speaker_id=main_speaker,
+                    )
                     print(f"✅ Сохранено {saved}")
                 else:
                     print("   нет")

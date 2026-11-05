@@ -5,7 +5,9 @@ import sqlite3
 from config import DB_PATH
 
 
-def _save_predictions(video_id, expert_name, channel_name, predictions_list):
+def _save_predictions(video_id, expert_name, channel_name, predictions_list,
+                     speaker_id=None):
+    """Сохраняет прогнозы. speaker_id — ID спикера (SPK_XX) из voice identification."""
     if not predictions_list:
         return 0
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
@@ -15,8 +17,9 @@ def _save_predictions(video_id, expert_name, channel_name, predictions_list):
             try:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO predictions "
-                    "(video_id, expert_name, channel_name, prediction_text) VALUES (?, ?, ?, ?)",
-                    (video_id, expert_name, channel_name, p)
+                    "(video_id, expert_name, channel_name, prediction_text, speaker_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (video_id, expert_name, channel_name, p, speaker_id or "")
                 )
                 if cur.rowcount > 0:
                     saved += 1
@@ -33,7 +36,7 @@ def _recent_predictions(limit=30):
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, expert_name, channel_name, prediction_text, "
-        "       prediction_date, verdict, source_url, fact_check_date "
+        "       prediction_date, verdict, speaker_id, source_url, fact_check_date "
         "FROM predictions "
         "ORDER BY prediction_date DESC LIMIT ?", (limit,)
     ).fetchall()
@@ -55,15 +58,13 @@ def get_expert_priority_rating(expert_name: str) -> float:
     return round(sum(1 for r in rows if r[0] == "confirmed") / len(rows) * 100, 1)
 
 
-# ─── CRUD для редактирования прогнозов ────────────────────
-
 def get_prediction(pred_id: int) -> dict | None:
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT id, video_id, expert_name, channel_name, prediction_text, "
         "       prediction_date, verdict, verdict_date, verdict_notes, "
-        "       source_url, fact_check_date "
+        "       speaker_id, source_url, fact_check_date "
         "FROM predictions WHERE id = ?", (pred_id,)
     ).fetchone()
     conn.close()
@@ -71,8 +72,6 @@ def get_prediction(pred_id: int) -> dict | None:
 
 
 def update_prediction_text(pred_id: int, new_text: str) -> bool:
-    """Обновляет только текст. verdict, verdict_date, verdict_notes,
-    source_url, fact_check_date — НЕ ТРОГАЕМ (их пишет Бот 3 через sync_back)."""
     new_text = (new_text or "").strip()
     if not new_text or len(new_text) > 400:
         return False
@@ -92,23 +91,15 @@ def update_prediction_text(pred_id: int, new_text: str) -> bool:
 
 
 def update_prediction_verdict(pred_id: int, verdict: str, notes: str = "") -> bool:
-    """Устанавливает вердикт вручную (из Telegram).
-
-    ВАЖНО: если Бот 3 (sync_back) уже записал verdict — не перезаписываем,
-    чтобы не потерять результаты фактчекинга. Для принудительной перезаписи
-    нужно сначала обнулить (verdict="pending"), потом установить новое значение.
-    """
     if verdict not in ("confirmed", "refuted", "unverifiable", "pending", ""):
         return False
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     try:
         if verdict:
-            # Проверяем, не установлен ли уже вердикт Ботом 3
             row = conn.execute(
                 "SELECT verdict FROM predictions WHERE id = ?", (pred_id,)
             ).fetchone()
             if row and row[0] and row[0] == verdict:
-                # Уже такой же вердикт — не перезаписываем дату
                 return True
             cur = conn.execute(
                 "UPDATE predictions SET verdict = ?, verdict_date = CURRENT_TIMESTAMP, "
@@ -149,7 +140,6 @@ def list_predictions(
     expert: str | None = None,
     verdict: str | None = None,
 ) -> tuple:
-    """Возвращает (rows, total)."""
     where = []
     params = []
     if expert:
@@ -170,7 +160,7 @@ def list_predictions(
     ).fetchone()[0]
     rows = conn.execute(
         f"SELECT id, expert_name, channel_name, prediction_text, "
-        f"       prediction_date, verdict, source_url, fact_check_date "
+        f"       prediction_date, verdict, speaker_id, source_url, fact_check_date "
         f"FROM predictions {where_sql} "
         f"ORDER BY prediction_date DESC LIMIT ? OFFSET ?",
         params + [limit, offset]

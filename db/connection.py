@@ -45,8 +45,6 @@ def _init_db():
         "verdict TEXT DEFAULT NULL, "
         "verdict_date TIMESTAMP DEFAULT NULL, "
         "verdict_notes TEXT DEFAULT NULL, "
-        "source_url TEXT DEFAULT NULL, "
-        "fact_check_date TIMESTAMP DEFAULT NULL, "
         "UNIQUE(video_id, prediction_text))"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_date ON predictions(prediction_date)")
@@ -122,6 +120,7 @@ def _init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             video_id TEXT NOT NULL,
             video_url TEXT NOT NULL,
+            speaker_id TEXT DEFAULT '',
             channel_name TEXT,
             channel_type TEXT,
             embedding BLOB NOT NULL,
@@ -135,7 +134,6 @@ def _init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_voices_status ON pending_voices(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_voices_video ON pending_voices(video_id)")
 
-    # Миграция: speaker_id в pending_voices (для старых БД)
     try:
         conn.execute("SELECT speaker_id FROM pending_voices LIMIT 1")
     except sqlite3.OperationalError:
@@ -176,7 +174,7 @@ def _init_db():
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
         print("🔄 Миграция: добавлена колонка next_retry_at")
 
-    # Миграции для predictions (если ещё нет source_url/fact_check_date)
+    # Миграции для predictions (source_url, fact_check_date, speaker_id)
     try:
         conn.execute("SELECT source_url FROM predictions LIMIT 1")
     except sqlite3.OperationalError:
@@ -188,6 +186,12 @@ def _init_db():
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE predictions ADD COLUMN fact_check_date TIMESTAMP")
         print("🔄 Миграция: добавлена колонка predictions.fact_check_date")
+
+    try:
+        conn.execute("SELECT speaker_id FROM predictions LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE predictions ADD COLUMN speaker_id TEXT")
+        print("🔄 Миграция: добавлена колонка predictions.speaker_id")
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_status ON task_queue(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority DESC, created_at)")

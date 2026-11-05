@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Список pending_voices с заголовками и готовыми командами для label_one.py."""
+"""Список pending_voices с заголовками, таймкодами и ссылками на фрагмент."""
 import sqlite3
 
 from config import DB_PATH
 from db.pending_voices import get_pending
+from db.transcripts_raw import get_transcript_raw_segments
 
 
 def _get_video_title(video_id: str) -> str:
@@ -31,13 +32,38 @@ def _get_video_title(video_id: str) -> str:
     return ""
 
 
+def _get_first_start(video_id: str, speaker_id: str) -> int:
+    """Возвращает начало первого сегмента с этим speaker_id (в секундах)."""
+    if not video_id or not speaker_id:
+        return 0
+    segs = get_transcript_raw_segments(video_id)
+    for s in segs:
+        if s.get("speaker") == speaker_id:
+            try:
+                return int(float(s.get("start", 0)))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def _format_tc(seconds: int) -> str:
+    """Секунды → HH:MM:SS или MM:SS."""
+    if seconds < 0:
+        seconds = 0
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
 def main():
     items = get_pending(limit=50)
     if not items:
         print("📭 Pending пуст")
         return
 
-    # Группируем по video_id
     by_video = {}
     for p in items:
         vid = p.get("video_id", "")
@@ -57,7 +83,11 @@ def main():
             pid = p["id"]
             spk = p.get("speaker_id") or "?"
             dur = p.get("duration_sec", 0)
-            print(f"  id={pid}, {spk}, {dur:.0f}с")
+            start_sec = _get_first_start(vid, spk)
+            tc = _format_tc(start_sec)
+            frag_url = f"https://youtu.be/{vid}?t={start_sec}" if vid else url
+            print(f"  id={pid}, {spk}, {dur:.0f}с, ⏱ {tc}")
+            print(f"    🎧 {frag_url}")
             print(f"    → python label_one.py {pid} \"<ФИО>\"")
             print(f"    → python label_one.py {pid} \"-\"   (удалить)")
         print()

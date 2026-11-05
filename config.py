@@ -1,11 +1,7 @@
 """
 Централизованная конфигурация бота.
 Все константы, env-переменные, классификация ошибок.
-Не зависит от aiogram/groq — только stdlib.
-
-Версия: v2.1.0-local (05.11.2026)
-- Все каналы одного типа: только id/name (без type/owner)
-- voice fingerprinting (SpeechBrain ECAPA)
+Версия: v2.1.2-local (05.11.2026)
 """
 
 import json
@@ -19,10 +15,6 @@ try:
 except ImportError:
     pass
 
-
-# ╔══════════════════════════════════════════════════════════╗
-# ║                    НАСТРОЙКИ                             ║
-# ╚══════════════════════════════════════════════════════════╝
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
@@ -44,12 +36,8 @@ HEARTBEAT_HOURS = int(os.getenv("HEARTBEAT_HOURS", "0"))
 GROQ_MAX_SIZE_MB = 24.0
 TELEGRAM_MAX_LEN = 4096
 
-
-# ─── Диаризация (SpeechBrain ECAPA) ────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-DIARIZATION_ENABLED = os.getenv("DIARIZATION_ENABLED", "1") == "1"
-DIARIZATION_MIN_SPEAKERS = int(os.getenv("DIARIZATION_MIN_SPEAKERS", "1"))
-DIARIZATION_MAX_SPEAKERS = int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4"))
+# Tavily (Bot 3, для scripts/test_factcheck.py)
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 
 # ─── Google Service Account ────────────────────────────────
@@ -78,7 +66,6 @@ else:
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
-# Все каналы одного типа: только id и name.
 CHANNELS_TO_WATCH = [
     {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест"},
     {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник"},
@@ -118,8 +105,6 @@ EXTRACT_PREDICTIONS = True
 MAX_PREDICTIONS_PER_VIDEO = 10
 MAX_PREDICTION_HORIZON_YEARS = 5
 
-
-# ─── Параметры Groq (TPM = 8000/мин, TPD = 200K/день) ─────
 SUMMARIZE_CHUNK_CHARS = int(os.getenv("SUMMARIZE_CHUNK_CHARS", "16000"))
 SUMMARIZE_FINAL_TOKENS = int(os.getenv("SUMMARIZE_FINAL_TOKENS", "3000"))
 SUMMARIZE_PARTIAL_TOKENS = int(os.getenv("SUMMARIZE_PARTIAL_TOKENS", "1000"))
@@ -133,6 +118,13 @@ DISPLAY_TIMEZONE_OFFSET = 3
 TRANSCRIPTS_CACHE_DAYS = int(os.getenv("TRANSCRIPTS_CACHE_DAYS", "7"))
 
 
+# ─── Диаризация (SpeechBrain ECAPA) ────────────────────────
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+DIARIZATION_ENABLED = os.getenv("DIARIZATION_ENABLED", "1") == "1"
+DIARIZATION_MIN_SPEAKERS = int(os.getenv("DIARIZATION_MIN_SPEAKERS", "1"))
+DIARIZATION_MAX_SPEAKERS = int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4"))
+
+
 # ╔══════════════════════════════════════════════════════════╗
 # ║           КЛАССИФИКАЦИЯ ОШИБОК                            ║
 # ╚══════════════════════════════════════════════════════════╝
@@ -144,6 +136,7 @@ _FATAL_ERROR_MARKERS = (
     "http error 404", "http error 410",
     "message is too long",
     "chat not found", "bot was blocked",
+    "cookies_expired",  # cookies протухли — не ретраить, уведомить владельца
 )
 
 _TRANSIENT_ERROR_MARKERS = (
