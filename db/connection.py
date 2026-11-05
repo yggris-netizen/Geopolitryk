@@ -45,6 +45,8 @@ def _init_db():
         "verdict TEXT DEFAULT NULL, "
         "verdict_date TIMESTAMP DEFAULT NULL, "
         "verdict_notes TEXT DEFAULT NULL, "
+        "source_url TEXT DEFAULT NULL, "
+        "fact_check_date TIMESTAMP DEFAULT NULL, "
         "UNIQUE(video_id, prediction_text))"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_date ON predictions(prediction_date)")
@@ -71,7 +73,6 @@ def _init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_date ON video_summaries(processed_at)")
 
-    # ─── Кеш транскриптов (плоский текст, для суммаризации) ─
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transcripts_cache (
             video_id TEXT PRIMARY KEY,
@@ -81,7 +82,6 @@ def _init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_date ON transcripts_cache(cached_at)")
 
-    # ─── Сырые сегменты транскриптов (для Бота 3) ──────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS transcripts_raw (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,12 +92,55 @@ def _init_db():
             transcript_json TEXT NOT NULL,
             language TEXT,
             duration_sec INTEGER,
-            schema_version INTEGER DEFAULT 1,
+            schema_version INTEGER DEFAULT 2,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_raw_video ON transcripts_raw(video_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_raw_expert ON transcripts_raw(expert_name)")
+
+    # ─── voice_profiles (Эталонные голоса) ────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            bio TEXT DEFAULT '',
+            role TEXT NOT NULL DEFAULT 'guest',
+            embedding BLOB NOT NULL,
+            duration_sec REAL DEFAULT 0,
+            source_video_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_voice_profiles_name ON voice_profiles(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_voice_profiles_role ON voice_profiles(role)")
+
+    # ─── pending_voices (Незнакомые голоса на разметку) ───
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_voices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id TEXT NOT NULL,
+            video_url TEXT NOT NULL,
+            channel_name TEXT,
+            channel_type TEXT,
+            embedding BLOB NOT NULL,
+            duration_sec REAL DEFAULT 0,
+            role_guess TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_voices_status ON pending_voices(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_voices_video ON pending_voices(video_id)")
+
+    # Миграция: speaker_id в pending_voices (для старых БД)
+    try:
+        conn.execute("SELECT speaker_id FROM pending_voices LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE pending_voices ADD COLUMN speaker_id TEXT DEFAULT ''")
+        print("🔄 Миграция: добавлена колонка pending_voices.speaker_id")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS task_queue (
@@ -121,7 +164,6 @@ def _init_db():
         )
     """)
 
-    # ─── Миграции для task_queue ───────────────────────────
     try:
         conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
     except sqlite3.OperationalError:
@@ -134,7 +176,7 @@ def _init_db():
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
         print("🔄 Миграция: добавлена колонка next_retry_at")
 
-    # ─── Миграции для predictions (для Бота 3) ─────────────
+    # Миграции для predictions (если ещё нет source_url/fact_check_date)
     try:
         conn.execute("SELECT source_url FROM predictions LIMIT 1")
     except sqlite3.OperationalError:

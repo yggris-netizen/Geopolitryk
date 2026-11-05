@@ -1,9 +1,9 @@
 """CRUD для transcripts_raw: сырые сегменты транскриптов для Бота 3.
 
-Контракт schema_version=1:
-  transcript_json = '[{"start": 0.0, "end": 4.2, "text": "..."}, ...]'
-  start/end — секунды (float), от начала видео.
-  Нет полей speaker/role — диаризацию делает Бот 3.
+Контракт schema_version=2:
+  transcript_json = '[{"start": 0.0, "end": 4.2, "text": "...", "speaker": "SPEAKER_01"}, ...]'
+  start/end — секунды (float).
+  speaker — ID спикера ("SPEAKER_00", "SPEAKER_01", "UNKNOWN") или "".
 """
 
 import json
@@ -13,8 +13,8 @@ from config import DB_PATH
 
 
 def save_transcript_raw(video_id, interview_id, expert_name, source_url,
-                        segments, language="ru", duration_sec=0, schema_version=1):
-    """Сохраняет сегменты транскрипта в transcripts_raw (INSERT OR REPLACE по video_id)."""
+                        segments, language="ru", duration_sec=0, schema_version=2):
+    """Сохраняет сегменты транскрипта в transcripts_raw."""
     if not video_id or not segments:
         return False
     payload = json.dumps(segments, ensure_ascii=False)
@@ -38,7 +38,6 @@ def save_transcript_raw(video_id, interview_id, expert_name, source_url,
 
 
 def get_transcript_raw(video_id):
-    """Возвращает запись или None."""
     if not video_id:
         return None
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
@@ -53,7 +52,6 @@ def get_transcript_raw(video_id):
 
 
 def get_transcript_raw_segments(video_id):
-    """Возвращает распарсенный список сегментов или []."""
     row = get_transcript_raw(video_id)
     if not row:
         return []

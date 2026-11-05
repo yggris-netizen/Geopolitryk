@@ -3,10 +3,9 @@
 Все константы, env-переменные, классификация ошибок.
 Не зависит от aiogram/groq — только stdlib.
 
-Версия: v2.0.1-local (03.11.2026)
-- Убран UKRLIFETV из CHANNELS_TO_WATCH
-- HOURS_BACK=24 (было 12)
-- MAX_REPEAT_EXPERTS_PER_CYCLE=999 (запрет на повторы снят)
+Версия: v2.1.0-local (05.11.2026)
+- Все каналы одного типа: только id/name (без type/owner)
+- voice fingerprinting (SpeechBrain ECAPA)
 """
 
 import json
@@ -33,9 +32,7 @@ OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 
-# Основная модель (8000 TPM, 200K TPD)
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-# Fallback при исчерпании TPD на основной модели
 GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
@@ -46,6 +43,13 @@ HEARTBEAT_HOURS = int(os.getenv("HEARTBEAT_HOURS", "0"))
 
 GROQ_MAX_SIZE_MB = 24.0
 TELEGRAM_MAX_LEN = 4096
+
+
+# ─── Диаризация (SpeechBrain ECAPA) ────────────────────────
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+DIARIZATION_ENABLED = os.getenv("DIARIZATION_ENABLED", "1") == "1"
+DIARIZATION_MIN_SPEAKERS = int(os.getenv("DIARIZATION_MIN_SPEAKERS", "1"))
+DIARIZATION_MAX_SPEAKERS = int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4"))
 
 
 # ─── Google Service Account ────────────────────────────────
@@ -74,13 +78,13 @@ else:
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
-# UKRLIFETV убран (v2.0.1-local)
+# Все каналы одного типа: только id и name.
 CHANNELS_TO_WATCH = [
-    {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест", "type": "author", "owner": "Александр Шелест"},
-    {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник",   "type": "author", "owner": "Руслан Бортник"},
-    {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live",       "type": "author", "owner": "Виталий Дикий"},
-    {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС",         "type": "media"},
-    {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online",  "type": "media"},
+    {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест"},
+    {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник"},
+    {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live"},
+    {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС"},
+    {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online"},
 ]
 
 TEST_VIDEO_URL = ""
@@ -92,15 +96,12 @@ DB_PATH = os.getenv("DB_PATH", "seen_videos.db")
 CHECK_INTERVAL_HOURS = 3
 WORKER_POLL_INTERVAL = 5
 
-# 24 часа (было 12)
 HOURS_BACK = int(os.getenv("HOURS_BACK", "24"))
 DAYS_BACK = HOURS_BACK / 24
 
 MIN_VIDEO_DURATION_SECONDS = 180
 MAX_VIDEO_DURATION_SECONDS = 5400
 MAX_VIDEOS_PER_CHANNEL_PER_CHECK = int(os.getenv("MAX_VIDEOS_PER_CHANNEL_PER_CHECK", "5"))
-# Запрет на одного эксперта на разных каналах снят (было 2)
-MAX_REPEAT_EXPERTS_PER_CYCLE = 999
 MIN_TRANSCRIPT_CHARS = 100
 
 YOUTUBE_VIDEOS_CACHE_TTL = 1800

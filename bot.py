@@ -1,6 +1,8 @@
 """
 YouTube → Telegram бот: аналитические выжимки.
 Точка входа: инициализация, роутеры, воркер, планировщик.
+
+v2.1.0-local: voice fingerprinting, все каналы одного типа, «Спикеры: A, B».
 """
 
 import asyncio
@@ -32,7 +34,10 @@ from db.queue import (
 )
 from services.youtube import get_video_info_ytdlp
 
-from handlers import admin_router, links_router, predictions_router
+from handlers import (
+    admin_router, links_router, predictions_router,
+    voice_registration_router,
+)
 from handlers.admin import set_owner_user_id as set_admin_owner
 from handlers.links import set_owner_user_id as set_links_owner
 from handlers.predictions import set_owner_user_id as set_preds_owner
@@ -95,7 +100,7 @@ if HEARTBEAT_HOURS > 0:
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
-dp.include_routers(admin_router, predictions_router, links_router)
+dp.include_routers(admin_router, predictions_router, links_router, voice_registration_router)
 
 set_admin_owner(OWNER_USER_ID)
 set_links_owner(OWNER_USER_ID)
@@ -222,21 +227,15 @@ async def _main():
             return
         info = get_video_info_ytdlp(url)
         proc_channel_name = info.get("channel", "") or ""
-        proc_channel_type = "media"
-        proc_channel_owner = ""
         cn_low = proc_channel_name.lower().strip()
         for ch in CHANNELS_TO_WATCH:
             ch_low = ch["name"].lower().strip()
-            ch_owner_low = (ch.get("owner", "") or "").lower().strip()
             if (cn_low == ch_low
                     or cn_low in ch_low
-                    or ch_low in cn_low
-                    or (ch_owner_low and cn_low == ch_owner_low)):
+                    or ch_low in cn_low):
                 proc_channel_name = ch["name"]
-                proc_channel_type = ch.get("type", "media")
-                proc_channel_owner = ch.get("owner", "")
                 break
-        print(f"  Канал (--process): {proc_channel_name} [{proc_channel_type}]")
+        print(f"  Канал (--process): {proc_channel_name}")
         ok, reason = await process_and_publish(
             url,
             video_title=info.get("title", ""),
@@ -244,8 +243,6 @@ async def _main():
             video_duration=info.get("duration", 0),
             video_published_at=info.get("published_at", ""),
             channel_name=proc_channel_name,
-            channel_type=proc_channel_type,
-            channel_owner=proc_channel_owner,
             skip_duration_check=True,
         )
         print(f"\n{'=' * 60}")

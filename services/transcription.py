@@ -3,6 +3,9 @@
 Возвращает tuple[str, list[dict]]:
   - str — плоский текст (для transcripts_cache, суммаризации, публикации)
   - list[dict] — сегменты [{start, end, text}] (для transcripts_raw, Бот 3)
+
+ВАЖНО: audio_file НЕ удаляется внутри — удаление делает publishers/telegram.py
+после диаризации.
 """
 
 import os
@@ -16,7 +19,6 @@ from config import (
 )
 from services.llm import groq_client
 
-# Условный путь к cookies: локально — относительный, на Bothost — /app/data/
 COOKIEFILE = "/app/data/cookies.txt" if os.path.exists("/app/data/cookies.txt") else "cookies.txt"
 
 _local_model = None
@@ -24,6 +26,7 @@ if WHISPER_MODE == "local":
     print(f"\nЗагружаю локальный Whisper '{WHISPER_MODEL_SIZE}'...")
     try:
         from faster_whisper import WhisperModel
+
         _local_model = WhisperModel(
             WHISPER_MODEL_SIZE, device="cpu", compute_type="int8",
             cpu_threads=1, num_workers=1,
@@ -117,7 +120,10 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
 
 
 def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
-    """Возвращает (text, segments). segments = [{start, end, text}]."""
+    """Возвращает (text, segments). segments = [{start, end, text}].
+
+    ВАЖНО: audio_path НЕ удаляется здесь — это делает publishers после диаризации.
+    """
     file_size_mb = os.path.getsize(audio_path) / 1024 / 1024
     print(f"   📁 Размер: {file_size_mb:.1f} MB")
 
@@ -156,19 +162,20 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
                     language=VIDEO_LANGUAGE,
                     response_format="verbose_json",
                 )
-            # verbose_json возвращает r.text и r.segments
             chunk_text = (getattr(r, "text", "") or "").strip()
             chunk_segments = getattr(r, "segments", None) or []
             print(f"   ✅ {len(chunk_text)} символов, {len(chunk_segments)} сегментов")
             full_text_parts.append(chunk_text)
             for seg in chunk_segments:
-                all_segments.append({
-                    "start": float(seg.get("start", 0)) + offset_sec
-                    if isinstance(seg, dict) else float(seg.start) + offset_sec,
-                    "end": float(seg.get("end", 0)) + offset_sec
-                    if isinstance(seg, dict) else float(seg.end) + offset_sec,
-                    "text": (seg.get("text", "") if isinstance(seg, dict) else seg.text or "").strip(),
-                })
+                if isinstance(seg, dict):
+                    s_start = float(seg.get("start", 0)) + offset_sec
+                    s_end = float(seg.get("end", 0)) + offset_sec
+                    s_text = (seg.get("text", "") or "").strip()
+                else:
+                    s_start = float(getattr(seg, "start", 0)) + offset_sec
+                    s_end = float(getattr(seg, "end", 0)) + offset_sec
+                    s_text = (getattr(seg, "text", "") or "").strip()
+                all_segments.append({"start": s_start, "end": s_end, "text": s_text})
             offset_sec += chunk_seconds_for(chunk, total_duration)
         except Exception as e:
             print(f"   ❌ Groq chunk {i}: {e}")
@@ -181,16 +188,11 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
                     pass
 
     full = " ".join(full_text_parts).strip()
-    if os.path.exists(audio_path):
-        try:
-            os.remove(audio_path)
-        except Exception:
-            pass
+    # audio_path НЕ удаляем — это делает publishers после диаризации
     return full, all_segments
 
 
 def chunk_seconds_for(chunk_path: str, total_duration: float) -> float:
-    """Возвращает длительность куска в секундах (для смещения сегментов)."""
     try:
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -203,7 +205,6 @@ def chunk_seconds_for(chunk_path: str, total_duration: float) -> float:
 
 
 def _transcribe_local(audio_path: str, total_duration: float = 0) -> tuple:
-    """Возвращает (text, segments). segments = [{start, end, text}]."""
     if _local_model is None:
         raise RuntimeError("локальный Whisper не инициализирован")
     segments_raw, _info = _local_model.transcribe(
@@ -222,11 +223,6 @@ def _transcribe_local(audio_path: str, total_duration: float = 0) -> tuple:
             "text": seg.text.strip(),
         })
     full = " ".join(text_parts).strip()
-    if os.path.exists(audio_path):
-        try:
-            os.remove(audio_path)
-        except Exception:
-            pass
     return full, segments
 
 

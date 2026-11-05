@@ -17,12 +17,7 @@ from db.queue import (
 from db.experts import (
     _get_experts_seen_today, _cleanup_old_experts,
 )
-from db.videos import _mark_video_processed
 from db.transcripts import cleanup_old_transcripts
-from services.expert_detection import (
-    _extract_name_from_title, _extract_name_from_description,
-    _finalize_name, _is_owner_name,
-)
 from services.youtube import (
     get_new_videos_from_channel, _quota_info,
 )
@@ -77,33 +72,15 @@ async def check_all_channels(shutdown_event=None):
             videos = videos[:MAX_VIDEOS_PER_CHANNEL_PER_CHECK]
 
         for v in videos:
-            prelim = _extract_name_from_title(v["title"])
-            if not prelim:
-                prelim = _extract_name_from_description(v.get("description", ""))
-            if prelim:
-                prelim = _finalize_name(prelim)
-
-            owner = ch.get("owner", "") or ""
-            if ch.get("type") == "author" and owner and prelim:
-                if _is_owner_name(prelim, owner):
-                    prelim = ""
-
-            # Запрет на повторы снят: все задачи с одинаковым приоритетом
-            is_rep = prelim and prelim in seen_experts
-            prio = 0 if is_rep else 5
-
             tid = _add_task_to_queue(
                 video_url=v["url"], video_id=v["video_id"],
                 video_title=v["title"],
                 video_published_at=v.get("published_at", ""),
                 channel_name=ch["name"],
-                channel_type=ch.get("type", "media"),
-                channel_owner=ch.get("owner", ""),
-                priority=prio, source="auto",
+                priority=5, source="auto",
             )
             if tid:
-                tag = "🔁" if is_rep else "🆕"
-                print(f"   {tag} #{tid}: {v['title'][:60]}")
+                print(f"   🆕 #{tid}: {v['title'][:60]}")
                 added += 1
             else:
                 print(f"   ⏭  в очереди: {v['title'][:60]}")

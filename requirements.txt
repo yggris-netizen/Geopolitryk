@@ -2,11 +2,14 @@ aiogram>=3.13
 httpx
 yt-dlp[default]>=2025.05.22
 bgutil-ytdlp-pot-provider
-mawo-natasha
+speechbrain
+torch
+torchaudio
+soundfile
 groq
 google-api-python-client
 google-auth
 apscheduler
 pymorphy3
 python-dotenv
-psutilmawo-natasha[slovnet]
+psutil

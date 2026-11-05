@@ -1,4 +1,12 @@
-"""Публикация выжимки в Telegram-канал + пайплайн обработки видео."""
+"""Публикация выжимки в Telegram-канал + пайплайн обработки видео.
+
+Voice fingerprinting:
+1. Скачали аудио → транскрибация.
+2. Voice identification → кластеры.
+3. detect_experts → experts + unknown.
+4. Незнакомые → pending_voices + уведомление с [✅ Спикер] [⏭ Пропустить].
+5. Публикация: «Спикеры: A, B» + «КАНАЛ: <name>» (если есть).
+"""
 
 import asyncio
 import os
@@ -14,13 +22,15 @@ from config import (
     GENERATE_HASHTAGS, GROQ_PREDICTIONS_PAUSE,
     MAX_VIDEO_DURATION_SECONDS,
     MIN_TRANSCRIPT_CHARS, MIN_VIDEO_DURATION_SECONDS,
-    NEUTRALIZE_TITLE, TELEGRAM_MAX_LEN,
+    NEUTRALIZE_TITLE, OWNER_USER_ID, TELEGRAM_MAX_LEN,
 )
 from db.experts import _mark_expert_seen_today
+from db.pending_voices import save_pending
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
 from db.transcripts import get_cached_transcript, save_cached_transcript
 from db.transcripts_raw import save_transcript_raw
+from handlers.voice_registration import build_unknown_notification
 from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
 from services.summarization import (
@@ -28,6 +38,9 @@ from services.summarization import (
     _check_context_errors, _format_title,
 )
 from services.transcription import download_audio, transcribe_audio
+from services.voice_identification import (
+    assign_speakers_to_segments, build_speaker_transcript, identify_speakers,
+)
 from services.youtube import (
     get_video_info_ytdlp, _extract_video_id, _get_thumbnail_url,
     _format_duration, _format_published_date,
@@ -36,7 +49,6 @@ from services.youtube import (
 
 _bot = None
 
-# Отключаем превью ссылок во всех send_message
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
@@ -58,45 +70,22 @@ def _looks_truncated_title(title: str) -> bool:
     return False
 
 
-def _experts_block(experts: list[dict]) -> str:
+def _speakers_block(experts: list[dict]) -> str:
+    """Формат: «Спикеры: A, B» или «Спикер: A». Если пусто — «Спикеры: не определены»."""
     if not experts:
-        return "<b>ЭКСПЕРТ</b>\nНеизвестный эксперт"
-
-    guests = [e for e in experts if e.get("role") == "guest"]
-    authors = [e for e in experts if e.get("role") == "author"]
-
-    if guests:
-        if len(guests) == 1:
-            e = guests[0]
-            s = f"<b>ЭКСПЕРТ</b>\n{e['name']}"
-            if e.get("bio"):
-                s += f" — {e['bio']}"
-            return s
-        lines = ["<b>ЭКСПЕРТЫ</b>"]
-        for e in guests:
-            line = f"• {e['name']}"
-            if e.get("bio"):
-                line += f" — {e['bio']}"
-            lines.append(line)
-        return "\n".join(lines)
-
-    if authors:
-        e = authors[0]
-        return f"<b>КАНАЛ</b>\n{e['name']}"
-
-    return "<b>ЭКСПЕРТ</b>\nНеизвестный эксперт"
+        return "<b>СПИКЕРЫ</b>\nне определены"
+    names = [e["name"] for e in experts if e.get("name")]
+    if not names:
+        return "<b>СПИКЕРЫ</b>\nне определены"
+    if len(names) == 1:
+        return f"<b>СПИКЕР</b>\n{names[0]}"
+    return f"<b>СПИКЕРЫ</b>\n{', '.join(names)}"
 
 
 def _experts_as_string(experts: list[dict]) -> str:
     if not experts:
-        return "Неизвестный эксперт"
-    guests = [e for e in experts if e.get("role") == "guest"]
-    authors = [e for e in experts if e.get("role") == "author"]
-    if guests:
-        return ", ".join(e["name"] for e in guests)
-    if authors:
-        return f"{authors[0]['name']} (канал)"
-    return experts[0]["name"]
+        return "Неизвестный спикер"
+    return ", ".join(e["name"] for e in experts if e.get("name")) or "Неизвестный спикер"
 
 
 async def send_expert_post(video_url, video_title, experts, channel_name, summary,
@@ -107,16 +96,10 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
     parts = []
     if video_title:
         parts.append(_format_title(video_title))
-    parts.append(_experts_block(experts))
+    parts.append(_speakers_block(experts))
 
-    only_author = any(e.get("role") == "author" for e in experts) and not any(
-        e.get("role") == "guest" for e in experts
-    )
-    if channel_name and not only_author:
-        ch_low = channel_name.strip().lower()
-        is_expert = any((e.get("name") or "").strip().lower() == ch_low for e in experts)
-        if not is_expert:
-            parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
+    if channel_name:
+        parts.append(f"<b>КАНАЛ</b>\n{channel_name}")
 
     if date_str:
         parts.append(f"<b>ОПУБЛИКОВАНО</b>\n{date_str}")
@@ -190,16 +173,56 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
             await asyncio.sleep(1)
 
 
+async def notify_owner_about_unknown(video_url, video_title, channel_name,
+                                      unknown: list, video_id: str):
+    """Уведомляет владельца о незнакомых голосах с inline-кнопками."""
+    if not unknown:
+        return
+    if not _bot:
+        return
+
+    pending_list = []
+    for u in unknown:
+        pid = save_pending(
+            video_id=video_id,
+            video_url=video_url,
+            embedding=u["embedding"],
+            duration_sec=u["duration_sec"],
+            channel_name=channel_name,
+            speaker_id=u.get("speaker_id", ""),
+        )
+        if pid:
+            pending_list.append({
+                "id": pid,
+                "speaker_id": u.get("speaker_id", ""),
+                "duration_sec": u["duration_sec"],
+            })
+
+    if not pending_list:
+        return
+
+    print(f"📤 Уведомление владельцу о {len(pending_list)} незнакомых голосах...")
+    text, keyboard = build_unknown_notification(video_url, video_title, pending_list)
+    try:
+        await _bot.send_message(
+            chat_id=OWNER_USER_ID, text=text,
+            reply_markup=keyboard,
+            link_preview_options=NO_PREVIEW,
+        )
+    except Exception as e:
+        print(f"⚠️  notify_owner: {e}")
+
+
 async def process_and_publish(video_url, video_title="", video_description="",
                                video_duration=0, video_published_at="",
-                               channel_name="", channel_type="media",
+                               channel_name="", channel_type="",
                                channel_owner="", skip_duration_check=False) -> tuple:
     print(f"\n{'=' * 60}")
     print(f"ОБРАБОТКА: {video_url}")
     if video_title:
         print(f"  Заголовок: {video_title[:80]}")
     if channel_name:
-        print(f"  Канал: {channel_name} [{channel_type}]")
+        print(f"  Канал: {channel_name}")
     print(f"{'=' * 60}\n")
 
     audio_file = None
@@ -218,8 +241,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
             info = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             full_title = info.get("title", "")
             if full_title and len(full_title) > len(video_title or ""):
-                print(f"  RSS:  {video_title[:70]!r}")
-                print(f"  yt-dlp: {full_title[:70]!r}")
                 video_title = full_title
             if not video_description:
                 video_description = info.get("description", "")
@@ -237,18 +258,17 @@ async def process_and_publish(video_url, video_title="", video_description="",
                     return False, f"too_long: {duration}s"
 
         if not published_at:
-            print("📅 Дата не задана — загружаю...")
             extra = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             published_at = extra.get("published_at", "")
 
-        # === КЕШ ТРАНСКРИПТОВ (плоский текст) ===
         transcript_text = ""
         if vid:
             transcript_text = get_cached_transcript(vid)
             if transcript_text:
-                print(f"💾 транскрипт из кеша ({len(transcript_text)} символов) — пропускаю скачивание")
+                print(f"💾 транскрипт из кеша ({len(transcript_text)} символов)")
 
         transcript_segments = []
+        clusters = []
 
         if not transcript_text:
             print("📥 Шаг 1/4: Скачивание...")
@@ -259,15 +279,30 @@ async def process_and_publish(video_url, video_title="", video_description="",
             transcript_text, transcript_segments = await asyncio.to_thread(
                 transcribe_audio, audio_file, duration
             )
+            print(f"📊 Длина: {len(transcript_text)}, сегментов: {len(transcript_segments)}")
+
+            if audio_file and os.path.exists(audio_file):
+                print("🎤 Шаг 2.5: Voice identification...")
+                clusters = await asyncio.to_thread(
+                    identify_speakers, audio_file, transcript_segments
+                )
+                if clusters:
+                    transcript_segments = assign_speakers_to_segments(transcript_segments, clusters)
+
+            if audio_file and os.path.exists(audio_file):
+                try:
+                    os.remove(audio_file)
+                    print("🧹 аудио удалено")
+                except Exception:
+                    pass
             audio_file = None
 
             if vid and transcript_text:
                 save_cached_transcript(vid, transcript_text)
-                print(f"💾 транскрипт сохранён в кеш ({len(transcript_text)} символов)")
+                print(f"💾 транскрипт сохранён в кеш")
 
         transcript_len = len(transcript_text.strip())
         print(f"📊 Длина транскрипта: {transcript_len}")
-        print(f"📊 Начало: {transcript_text[:200]!r}")
 
         if transcript_len < MIN_TRANSCRIPT_CHARS:
             return False, f"transcript_too_short: {transcript_len}"
@@ -286,30 +321,33 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 display_title = n
                 print(f"✅ {display_title}\n")
 
-        print("🔍 Эксперт(ы)...")
-        experts = detect_experts(
-            video_title, transcript_text, description=video_description,
-            channel_name=channel_name, channel_type=channel_type,
-            channel_owner=channel_owner,
+        print("🔍 Спикеры...")
+        experts, unknown = detect_experts(
+            video_title, transcript_text,
+            channel_name=channel_name,
+            clusters=clusters,
+            video_url=video_url,
         )
         for e in experts:
-            mark = "🌐" if e.get("role") == "author" else "👤"
-            bio = f" — {e['bio']}" if e.get("bio") else ""
-            print(f"   {mark} {e['name']}{bio}")
+            spk = f" [{e.get('speaker', '')}]" if e.get("speaker") else ""
+            print(f"   ✅ {e['name']}{spk}")
         print()
 
-        # === СОХРАНЕНИЕ СЫРОГО ТРАНСКРИПТА ДЛЯ БОТА 3 ===
+        if unknown:
+            await notify_owner_about_unknown(
+                video_url, display_title, channel_name, unknown, vid
+            )
+
         if vid and transcript_segments:
-            experts_str_for_raw = _experts_as_string(experts)
             save_transcript_raw(
                 video_id=vid,
                 interview_id=None,
-                expert_name=experts_str_for_raw,
+                expert_name=_experts_as_string(experts),
                 source_url=video_url,
                 segments=transcript_segments,
                 language="ru",
                 duration_sec=int(duration or 0),
-                schema_version=1,
+                schema_version=2,
             )
             print(f"💾 transcripts_raw сохранён ({len(transcript_segments)} сегментов)\n")
 
@@ -331,20 +369,17 @@ async def process_and_publish(video_url, video_title="", video_description="",
         _save_summary(vid, experts_str, channel_name, summary,
                       video_title=display_title, video_published_at=published_at)
         for e in experts:
-            if e.get("role") == "guest":
-                _mark_expert_seen_today(e["name"])
+            _mark_expert_seen_today(e["name"])
 
         if EXTRACT_PREDICTIONS:
             try:
-                print(f"⏸  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами (восстановление TPM Groq)...")
+                print(f"⏸  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами...")
                 await asyncio.sleep(GROQ_PREDICTIONS_PAUSE)
                 print("📊 Прогнозы...")
                 preds = extract_predictions(transcript_text, experts_str)
                 if preds:
                     saved = _save_predictions(vid, experts_str, channel_name, preds)
                     print(f"✅ Сохранено {saved}")
-                    for p in preds:
-                        print(f"   • {p[:120]}")
                 else:
                     print("   нет")
             except Exception as e:
@@ -357,10 +392,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         err_msg = str(e)[:500]
         print(f"\n❌ {err_type}: {err_msg}")
         traceback.print_exc()
-        try:
-            sys.stderr.flush()
-        except Exception:
-            pass
         if audio_file and os.path.exists(audio_file):
             try:
                 os.remove(audio_file)
