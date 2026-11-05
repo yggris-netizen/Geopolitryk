@@ -96,22 +96,19 @@ def _build_prompt(prediction_text: str, expert_name: str,
 
 
 def _extract_json(raw: str) -> dict | None:
-    """Пытается извлечь JSON из ответа LLM: чистый / в ```json / с текстом вокруг."""
+    """Извлекает JSON из ответа LLM: чистый / в ```json / с текстом вокруг."""
     if not raw:
         return None
-    # 1. Чистый JSON
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # 2. Убрать ```json ... ```
     cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
     cleaned = re.sub(r'\s*```$', '', cleaned)
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
-    # 3. Найти первую {...} (жадно, с DOTALL)
     m = re.search(r'\{.*\}', raw, re.DOTALL)
     if m:
         try:
@@ -122,38 +119,31 @@ def _extract_json(raw: str) -> dict | None:
 
 
 def _call_llm(prompt: str) -> dict:
+    """Без JSON mode (response_format) — gpt-oss-20b падает с BadRequestError."""
     models = [GROQ_MODEL]
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
     for model in models:
-        for use_json_mode in (True, False):
-            try:
-                kwargs = dict(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=model,
-                    temperature=0,
-                    max_tokens=600,
-                )
-                if use_json_mode:
-                    kwargs["response_format"] = {"type": "json_object"}
-                r = groq_client.chat.completions.create(**kwargs)
-                raw = (r.choices[0].message.content or "").strip()
-                data = _extract_json(raw)
-                if data is None:
-                    print(f"⚠️  LLM ({model}, json={use_json_mode}): не JSON, raw={raw[:200]!r}")
-                    continue
-                return {
-                    "verdict": data.get("verdict", "unverifiable"),
-                    "source_url": data.get("source_url", ""),
-                    "reasoning": (data.get("reasoning") or "")[:200],
-                }
-            except Exception as e:
-                err = str(e).lower()
-                # response_format не поддержан — повтор без него
-                if use_json_mode and ("response_format" in err or "json" in err and "support" in err):
-                    continue
-                print(f"⚠️  LLM ({model}, json={use_json_mode}): {type(e).__name__}: {e!r}")
-                break
+        try:
+            r = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0,
+                max_tokens=600,
+            )
+            raw = (r.choices[0].message.content or "").strip()
+            data = _extract_json(raw)
+            if data is None:
+                print(f"⚠️  LLM ({model}): не JSON, raw={raw[:200]!r}")
+                continue
+            return {
+                "verdict": data.get("verdict", "unverifiable"),
+                "source_url": data.get("source_url", ""),
+                "reasoning": (data.get("reasoning") or "")[:200],
+            }
+        except Exception as e:
+            print(f"⚠️  LLM ({model}): {type(e).__name__}: {e!r}")
+            continue
     return {"verdict": "unverifiable", "source_url": "", "reasoning": "LLM не ответил"}
 
 
