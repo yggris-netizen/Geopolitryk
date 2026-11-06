@@ -1,8 +1,15 @@
-"""Определение спикеров по голосу (voice fingerprinting) с фильтрацией шума
-и дедупликацией известных по имени.
+"""Определение спикеров по голосу (voice fingerprinting).
 
-Порог MATCH_THRESHOLD = 0.78 (Артём 0.79 → match, Бизяев-дубликат 0.77 → near-match).
-Дубликаты experts по имени — отбрасываются (не в unknown).
+Порядок:
+1. duration < MIN_MATCH_DURATION_SEC (20с) → шум (даже если match).
+2. find_best_match (>= 0.78) → experts.
+3. near-match (0.70–0.78) → «возможно, X», пропуск.
+4. duration < MIN_UNKNOWN_DURATION_SEC (30с) → шум (не в unknown).
+5. иначе → unknown.
+
+Фиксы:
+- #61: Бортник (28с) >= 20с → match, не шум.
+- #62: Чаплыга (163с) → unknown (pending сохраняется отдельно).
 """
 
 import numpy as np
@@ -10,7 +17,8 @@ import numpy as np
 from db.voice_profiles import find_best_match
 from services.speaker_embedding import cosine_similarity
 
-MIN_UNKNOWN_DURATION_SEC = 30.0
+MIN_MATCH_DURATION_SEC = 20.0      # короче 20с — шум, даже если match
+MIN_UNKNOWN_DURATION_SEC = 30.0    # короче 30с — не в unknown
 UNKNOWN_DEDUP_THRESHOLD = 0.85
 NEAR_MATCH_THRESHOLD = 0.70
 MATCH_THRESHOLD = 0.78
@@ -34,6 +42,13 @@ def detect_experts(video_title, transcript, description="",
         speaker_id = cl["speaker_id"]
         duration = cl.get("duration_sec", 0)
 
+        # 1. Слишком короткий для match — шум
+        if duration < MIN_MATCH_DURATION_SEC:
+            print(f"   ⏭ {speaker_id} ({duration:.0f}с < {MIN_MATCH_DURATION_SEC:.0f}с) "
+                  f"— шум, пропускаю")
+            continue
+
+        # 2. Точное совпадение (>= MATCH_THRESHOLD)
         match = find_best_match(cl["embedding"], threshold=MATCH_THRESHOLD)
         if match:
             experts_raw.append({
@@ -47,25 +62,27 @@ def detect_experts(video_title, transcript, description="",
                   f"(score={match['score']:.2f}, {duration:.0f}с)")
             continue
 
+        # 3. Near-match (0.70–0.78) — «возможно, X», не в pending
         near = find_best_match(cl["embedding"], threshold=NEAR_MATCH_THRESHOLD)
         if near:
             print(f"   ⚠️  {speaker_id} → возможно, {near['name']} "
                   f"(score={near['score']:.2f}, {duration:.0f}с) — пропускаю")
             continue
 
+        # 4. Слишком короткий для unknown — шум
         if duration < MIN_UNKNOWN_DURATION_SEC:
             print(f"   ⏭ {speaker_id} ({duration:.0f}с < {MIN_UNKNOWN_DURATION_SEC:.0f}с) "
                   f"— шум, пропускаю")
             continue
 
+        # 5. Кандидат в unknown
         unknown_candidates.append({
             "speaker_id": speaker_id,
             "embedding": cl["embedding"],
             "duration_sec": duration,
         })
 
-    # Дедупликация experts по имени: оставляем с максимальным duration_sec,
-    # дубликаты — отбрасываем (не в unknown)
+    # Дедупликация experts по имени (оставляем с большим duration_sec)
     by_name = {}
     for e in experts_raw:
         name = e["name"]

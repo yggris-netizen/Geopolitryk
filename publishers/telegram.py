@@ -1,7 +1,8 @@
 """Публикация выжимки в Telegram-канал + пайплайн обработки видео.
 
 Voice fingerprinting + фильтрация шума + дедупликация имён.
-Уведомления о незнакомцах — за флагом NOTIFY_UNKNOWN_VOICES (по умолчанию False).
+pending_voices сохраняется ВСЕГДА (даже при NOTIFY_UNKNOWN_VOICES=False),
+уведомление владельцу — по флагу NOTIFY_UNKNOWN_VOICES.
 """
 
 import asyncio
@@ -214,7 +215,7 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
 async def notify_owner_about_unknown(video_url, video_title, channel_name,
                                       unknown: list, video_id: str,
                                       experts: list = None):
-    """Уведомляет владельца о незнакомых голосах (с блоком «Уже распознаны»)."""
+    """Сохраняет pending ВСЕГДА. Уведомление — только если NOTIFY_UNKNOWN_VOICES."""
     if not unknown:
         return
     if not _bot:
@@ -238,6 +239,12 @@ async def notify_owner_about_unknown(video_url, video_title, channel_name,
             })
 
     if not pending_list:
+        return
+
+    print(f"💾 pending: сохранено {len(pending_list)} незнакомцев")
+
+    if not NOTIFY_UNKNOWN_VOICES:
+        print(f"   ⏭ Уведомление отключено (NOTIFY_UNKNOWN_VOICES=False)")
         return
 
     print(f"📤 Уведомление владельцу о {len(pending_list)} незнакомых голосах...")
@@ -380,14 +387,12 @@ async def process_and_publish(video_url, video_title="", video_description="",
             print(f"   ✅ {e['name']}{spk}")
         print()
 
-        # Уведомления о незнакомцах — только если включено (NOTIFY_UNKNOWN_VOICES=1)
-        if unknown and NOTIFY_UNKNOWN_VOICES:
+        # pending сохраняется ВСЕГДА, уведомление — по флагу
+        if unknown:
             await notify_owner_about_unknown(
                 video_url, display_title, channel_name, unknown, vid,
                 experts=experts,
             )
-        elif unknown:
-            print(f"   ⏭ Уведомление о незнакомцах отключено (NOTIFY_UNKNOWN_VOICES=False)")
 
         if vid and transcript_segments:
             save_transcript_raw(

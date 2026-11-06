@@ -1,10 +1,10 @@
 """
 Централизованная конфигурация бота.
 Все константы, env-переменные, классификация ошибок.
-Версия: v2.1.5-local (06.11.2026)
+Версия: v2.1.6-local (06.11.2026)
 - 10 каналов (5 старых + 5 тестовых)
 - MAX_VIDEO_DURATION_SECONDS = 7200 (2 часа)
-- NOTIFY_UNKNOWN_VOICES = False (отключено, пока не работает)
+- NOTIFY_UNKNOWN_VOICES = False (уведомления отключены, pending — всегда)
 """
 
 import json
@@ -42,7 +42,7 @@ TELEGRAM_MAX_LEN = 4096
 # Tavily (Bot 3, для scripts/test_factcheck.py)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# Уведомления о незнакомых голосах (пока не работает — отключено)
+# Уведомления о незнакомых голосах (pending сохраняется всегда, уведомление — по флагу)
 # Включить: NOTIFY_UNKNOWN_VOICES=1 в .env, или True здесь
 NOTIFY_UNKNOWN_VOICES = os.getenv("NOTIFY_UNKNOWN_VOICES", "0") == "1"
 
@@ -101,7 +101,7 @@ HOURS_BACK = int(os.getenv("HOURS_BACK", "24"))
 DAYS_BACK = HOURS_BACK / 24
 
 MIN_VIDEO_DURATION_SECONDS = 180
-MAX_VIDEO_DURATION_SECONDS = 7200   # было 5400 (1.5 ч) — теперь 2 часа
+MAX_VIDEO_DURATION_SECONDS = 7200   # 2 часа
 MAX_VIDEOS_PER_CHANNEL_PER_CHECK = int(os.getenv("MAX_VIDEOS_PER_CHANNEL_PER_CHECK", "5"))
 MIN_TRANSCRIPT_CHARS = 100
 
