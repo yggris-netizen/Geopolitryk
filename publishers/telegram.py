@@ -1,7 +1,7 @@
 """Публикация выжимки в Telegram-канал + пайплайн обработки видео.
 
 Voice fingerprinting + фильтрация шума + дедупликация имён.
-Уведомление владельца при протухании cookies (не чаще 1 раза в час).
+Уведомления о незнакомцах — за флагом NOTIFY_UNKNOWN_VOICES (по умолчанию False).
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from config import (
     GENERATE_HASHTAGS, GROQ_PREDICTIONS_PAUSE,
     MAX_VIDEO_DURATION_SECONDS,
     MIN_TRANSCRIPT_CHARS, MIN_VIDEO_DURATION_SECONDS,
-    NEUTRALIZE_TITLE, OWNER_USER_ID, TELEGRAM_MAX_LEN,
+    NEUTRALIZE_TITLE, NOTIFY_UNKNOWN_VOICES, OWNER_USER_ID, TELEGRAM_MAX_LEN,
 )
 from db.experts import _mark_expert_seen_today
 from db.pending_voices import save_pending
@@ -50,7 +50,6 @@ _bot = None
 
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
-# Дедупликация алертов о cookies: не чаще 1 раза в час
 _LAST_COOKIES_ALERT_TS = 0.0
 _COOKIES_ALERT_INTERVAL_SEC = 3600
 
@@ -74,7 +73,6 @@ def _looks_truncated_title(title: str) -> bool:
 
 
 def _unique_names(experts: list[dict]) -> list[str]:
-    """Уникальные имена из experts (без дубликатов, порядок сохраняется)."""
     seen = set()
     result = []
     for e in experts:
@@ -100,7 +98,6 @@ def _experts_as_string(experts: list[dict]) -> str:
 
 
 async def _notify_owner_text(text: str) -> None:
-    """Простое уведомление владельцу (для алертов, не для разметки)."""
     if not _bot:
         return
     try:
@@ -113,7 +110,6 @@ async def _notify_owner_text(text: str) -> None:
 
 
 async def _notify_cookies_expired(video_url: str, error_text: str) -> None:
-    """Уведомляет о протухших cookies (не чаще 1 раза в час)."""
     global _LAST_COOKIES_ALERT_TS
     now = time.time()
     if now - _LAST_COOKIES_ALERT_TS < _COOKIES_ALERT_INTERVAL_SEC:
@@ -384,11 +380,14 @@ async def process_and_publish(video_url, video_title="", video_description="",
             print(f"   ✅ {e['name']}{spk}")
         print()
 
-        if unknown:
+        # Уведомления о незнакомцах — только если включено (NOTIFY_UNKNOWN_VOICES=1)
+        if unknown and NOTIFY_UNKNOWN_VOICES:
             await notify_owner_about_unknown(
                 video_url, display_title, channel_name, unknown, vid,
                 experts=experts,
             )
+        elif unknown:
+            print(f"   ⏭ Уведомление о незнакомцах отключено (NOTIFY_UNKNOWN_VOICES=False)")
 
         if vid and transcript_segments:
             save_transcript_raw(
@@ -418,7 +417,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         print("✅ Опубликовано\n")
 
         experts_str = _experts_as_string(experts)
-        # speaker_id — первый эксперт (главный гость/ведущий)
         main_speaker = ""
         if experts:
             main_speaker = experts[0].get("speaker", "") or ""

@@ -1,7 +1,10 @@
 """
 Централизованная конфигурация бота.
 Все константы, env-переменные, классификация ошибок.
-Версия: v2.1.2-local (05.11.2026)
+Версия: v2.1.5-local (06.11.2026)
+- 10 каналов (5 старых + 5 тестовых)
+- MAX_VIDEO_DURATION_SECONDS = 7200 (2 часа)
+- NOTIFY_UNKNOWN_VOICES = False (отключено, пока не работает)
 """
 
 import json
@@ -39,6 +42,10 @@ TELEGRAM_MAX_LEN = 4096
 # Tavily (Bot 3, для scripts/test_factcheck.py)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
+# Уведомления о незнакомых голосах (пока не работает — отключено)
+# Включить: NOTIFY_UNKNOWN_VOICES=1 в .env, или True здесь
+NOTIFY_UNKNOWN_VOICES = os.getenv("NOTIFY_UNKNOWN_VOICES", "0") == "1"
+
 
 # ─── Google Service Account ────────────────────────────────
 _creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
@@ -66,12 +73,19 @@ else:
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
+# Все каналы одного типа: только id и name.
 CHANNELS_TO_WATCH = [
     {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест"},
     {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник"},
     {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live"},
     {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС"},
     {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online"},
+    # ─── Тестовые каналы (v2.1.5) ───
+    {"id": "UCxkdtxa54kQLRmmWaBH0K2w", "name": "UKRLIFETV"},
+    {"id": "UC8CAQSzI8OdvubZi_PR6JKg", "name": "PolitExpert"},
+    {"id": "UCu89UjwcCypuc-KfSKspCKA", "name": "MayiakUA"},
+    {"id": "UCQh4r6hLcDeE_13-A-35S9g", "name": "Свободный"},
+    {"id": "UCMrmW9Vf6N1qUia15Erj-UQ", "name": "Легіст"},
 ]
 
 TEST_VIDEO_URL = ""
@@ -87,7 +101,7 @@ HOURS_BACK = int(os.getenv("HOURS_BACK", "24"))
 DAYS_BACK = HOURS_BACK / 24
 
 MIN_VIDEO_DURATION_SECONDS = 180
-MAX_VIDEO_DURATION_SECONDS = 5400
+MAX_VIDEO_DURATION_SECONDS = 7200   # было 5400 (1.5 ч) — теперь 2 часа
 MAX_VIDEOS_PER_CHANNEL_PER_CHECK = int(os.getenv("MAX_VIDEOS_PER_CHANNEL_PER_CHECK", "5"))
 MIN_TRANSCRIPT_CHARS = 100
 
@@ -136,7 +150,7 @@ _FATAL_ERROR_MARKERS = (
     "http error 404", "http error 410",
     "message is too long",
     "chat not found", "bot was blocked",
-    "cookies_expired",  # cookies протухли — не ретраить, уведомить владельца
+    "cookies_expired",
 )
 
 _TRANSIENT_ERROR_MARKERS = (
