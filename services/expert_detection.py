@@ -2,26 +2,46 @@
 
 Порядок:
 1. duration < MIN_MATCH_DURATION_SEC (20с) → шум (даже если match).
-2. find_best_match (>= 0.78) → experts.
-3. near-match (0.70–0.78) → «возможно, X», пропуск.
-4. duration < MIN_UNKNOWN_DURATION_SEC (30с) → шум (не в unknown).
-5. иначе → unknown.
+2. find_top_n_matches (>= 0.78) → топ-2 профиля.
+3. NEGATIVE CHECK: если два профиля очень похожи (cos > 0.90)
+   и разница в score < 0.03 → неоднозначно → в unknown (pending).
+4. match = top[0] → experts.
+5. near-match (0.70–0.78) → «возможно, X», пропуск.
+6. duration < MIN_UNKNOWN_DURATION_SEC (30с) → шум (не в unknown).
+7. иначе → unknown.
 
-Фиксы:
-- #61: Бортник (28с) >= 20с → match, не шум.
-- #62: Чаплыга (163с) → unknown (pending сохраняется отдельно).
+Оптимизация: один проход по профилям (_find_top_n_matches) вместо
+find_best_match + _find_top_2_matches.
 """
 
 import numpy as np
 
-from db.voice_profiles import find_best_match
+from db.voice_profiles import get_all_profiles
 from services.speaker_embedding import cosine_similarity
 
-MIN_MATCH_DURATION_SEC = 20.0      # короче 20с — шум, даже если match
-MIN_UNKNOWN_DURATION_SEC = 30.0    # короче 30с — не в unknown
+MIN_MATCH_DURATION_SEC = 20.0
+MIN_UNKNOWN_DURATION_SEC = 30.0
 UNKNOWN_DEDUP_THRESHOLD = 0.85
 NEAR_MATCH_THRESHOLD = 0.70
 MATCH_THRESHOLD = 0.78
+
+# Negative check: если два профиля cos > 0.90 и diff score < 0.03 → неоднозначно
+NEGATIVE_COS_THRESHOLD = 0.90
+NEGATIVE_DIFF_THRESHOLD = 0.03
+
+
+def _find_top_n_matches(embedding, profiles: list, threshold: float, n: int = 2) -> list:
+    """Возвращает топ-n профилей с score >= threshold, по убыванию score."""
+    scores = []
+    for p in profiles:
+        try:
+            sim = cosine_similarity(embedding, p["embedding"])
+        except Exception:
+            continue
+        if sim >= threshold:
+            scores.append((p, float(sim)))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return scores[:n]
 
 
 def detect_experts(video_title, transcript, description="",
@@ -35,6 +55,7 @@ def detect_experts(video_title, transcript, description="",
 
     print(f"   → Режим: voice fingerprinting ({len(clusters)} кластеров)")
 
+    profiles = get_all_profiles()  # один раз на вызов
     experts_raw = []
     unknown_candidates = []
 
@@ -48,25 +69,55 @@ def detect_experts(video_title, transcript, description="",
                   f"— шум, пропускаю")
             continue
 
-        # 2. Точное совпадение (>= MATCH_THRESHOLD)
-        match = find_best_match(cl["embedding"], threshold=MATCH_THRESHOLD)
-        if match:
+        # 2. Топ-2 совпадения (>= MATCH_THRESHOLD)
+        top2 = _find_top_n_matches(cl["embedding"], profiles,
+                                    threshold=MATCH_THRESHOLD, n=2)
+
+        if top2:
+            # ─── NEGATIVE CHECK ───
+            if len(top2) >= 2:
+                first_p, first_s = top2[0]
+                second_p, second_s = top2[1]
+                try:
+                    cos_between = cosine_similarity(
+                        first_p["embedding"], second_p["embedding"]
+                    )
+                except Exception:
+                    cos_between = 0.0
+                diff = first_s - second_s
+                if (cos_between > NEGATIVE_COS_THRESHOLD
+                        and diff < NEGATIVE_DIFF_THRESHOLD):
+                    print(f"   ⚠️  {speaker_id} — НЕОДНОЗНАЧНО: "
+                          f"{first_p['name']} ({first_s:.2f}) vs "
+                          f"{second_p['name']} ({second_s:.2f}), "
+                          f"cos={cos_between:.2f}, diff={diff:.3f} → pending")
+                    unknown_candidates.append({
+                        "speaker_id": speaker_id,
+                        "embedding": cl["embedding"],
+                        "duration_sec": duration,
+                    })
+                    continue
+
+            # Обычный match (top[0])
+            first_p, first_s = top2[0]
             experts_raw.append({
-                "name": match["name"],
-                "role": match.get("role", "guest"),
+                "name": first_p["name"],
+                "role": first_p.get("role", "guest"),
                 "speaker": speaker_id,
                 "duration_sec": duration,
-                "score": match["score"],
+                "score": first_s,
             })
-            print(f"   ✅ {speaker_id} → {match['name']} "
-                  f"(score={match['score']:.2f}, {duration:.0f}с)")
+            print(f"   ✅ {speaker_id} → {first_p['name']} "
+                  f"(score={first_s:.2f}, {duration:.0f}с)")
             continue
 
         # 3. Near-match (0.70–0.78) — «возможно, X», не в pending
-        near = find_best_match(cl["embedding"], threshold=NEAR_MATCH_THRESHOLD)
+        near = _find_top_n_matches(cl["embedding"], profiles,
+                                    threshold=NEAR_MATCH_THRESHOLD, n=1)
         if near:
-            print(f"   ⚠️  {speaker_id} → возможно, {near['name']} "
-                  f"(score={near['score']:.2f}, {duration:.0f}с) — пропускаю")
+            np_, ns_ = near[0]
+            print(f"   ⚠️  {speaker_id} → возможно, {np_['name']} "
+                  f"(score={ns_:.2f}, {duration:.0f}с) — пропускаю")
             continue
 
         # 4. Слишком короткий для unknown — шум
