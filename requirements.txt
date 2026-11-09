@@ -10,8 +10,9 @@ groq
 google-api-python-client
 google-auth
 apscheduler
-pymorphy3
 python-dotenv
 psutil
 tavily-python
 rapidfuzz>=3.0.0
+# transformers — для NLI (опционально, D2 не использует)
+# pip install transformers torch
