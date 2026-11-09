@@ -14,3 +14,4 @@ pymorphy3
 python-dotenv
 psutil
 tavily-python
+rapidfuzz>=3.0.0

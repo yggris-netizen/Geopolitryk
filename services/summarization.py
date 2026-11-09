@@ -1,240 +1,218 @@
-"""Суммаризация, нейтрализация заголовков, хештеги. Фикс 413 + каскад моделей на TPD."""
-
-import html
+# -*- coding: utf-8 -*-
+"""Суммаризация (Map-Reduce) + JSON с цитатами. reasoning_effort='low'."""
+import json
 import re
 import time
 
 from config import (
     GROQ_DELAY_BETWEEN_CHUNKS, GROQ_FALLBACK_MODEL,
-    GROQ_MAX_RETRIES, GROQ_MODEL, MAX_TITLE_LEN,
-    SUMMARIZE_CHUNK_CHARS, SUMMARIZE_FINAL_TOKENS, SUMMARIZE_PARTIAL_TOKENS,
+    GROQ_MAX_RETRIES, GROQ_MODEL,
+    SUMMARIZE_CHUNK_CHARS, SUMMARIZE_FINAL_TOKENS,
+    SUMMARIZE_PARTIAL_TOKENS,
 )
 from services.llm import groq_client
 
 
-def generate_hashtags(expert_name, summary):
-    prompt = f"""3 хештега (#Слово через пробел).
-
-Эксперт: {expert_name}
-Текст: {summary[:600]}
-
-Хештеги:"""
-    try:
-        r = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=GROQ_MODEL, temperature=0.4, max_tokens=300,
-        )
-        tags = r.choices[0].message.content.strip()
-        valid = [t for t in tags.split() if t.startswith("#") and len(t) > 2]
-        return " ".join(valid[:3])
-    except Exception:
-        return ""
-
-
-def _is_title_neutral(title):
-    if not title:
-        return True
-    if title.isupper():
-        return False
-    if any(c in title for c in "!🎯🍀🔥💥⚡📌❗❕"):
-        return False
-    if len(title) > MAX_TITLE_LEN:
-        return False
-    words = title.split()
-    if words:
-        caps_count = sum(1 for w in words if len(w) > 2 and w.isupper())
-        if caps_count / len(words) > 0.3:
-            return False
-    return True
-
-
-def _simple_neutralize(title):
-    if not title:
-        return ""
-    c = re.sub(r'[🍀🔥💥⚡️🎯📌❗❕!]', '', title)
-    c = re.sub(r'\s+', ' ', c).strip()
-    words = c.split()
-    new_words = [w.capitalize() if len(w) > 2 and w.isupper() else w for w in words]
-    c = " ".join(new_words)
-    if len(c) > MAX_TITLE_LEN:
-        c = c[:MAX_TITLE_LEN].rsplit(' ', 1)[0] + "…"
-    return c
-
-
-def neutralize_title(video_title):
-    if not video_title:
-        return ""
-    if _is_title_neutral(video_title):
-        return video_title
-    prompt = f"""Перепиши заголовок нейтрально (до 80 символов). Без CAPS, «!», эмодзи, кликбейта.
-
-Оригинал: {video_title}
-
-Нейтральный:"""
-    try:
-        r = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=GROQ_MODEL, temperature=0.4, max_tokens=500,
-        )
-        new = r.choices[0].message.content.strip().strip('"').strip("'").strip()
-        if not new or len(new) < 5 or new.lower() == video_title.lower() or new.isupper():
-            return _simple_neutralize(video_title)
-        if not _is_title_neutral(new):
-            return _simple_neutralize(video_title)
-        return new
-    except Exception:
-        return _simple_neutralize(video_title)
-
-
-def _format_title(title, max_len=MAX_TITLE_LEN):
-    if not title:
-        return ""
-    title = html.unescape(title)
-    if len(title) > max_len:
-        title = title[:max_len - 1] + "…"
-    return f"<b>{title.upper()}</b>"
-
-
-def _call_groq_with_retry(messages, temperature, max_tokens, label=""):
-    """
-    TPM (tokens per minute) → retry с паузой на текущей модели.
-    TPD (tokens per day) → переключение на GROQ_FALLBACK_MODEL.
-    Если все модели исчерпали TPD — RuntimeError (worker пометит как error).
-    """
+def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effort="low"):
+    """Groq с каскадом (20b -> 120b), retry при TPM, reasoning_effort='low'."""
     models = [GROQ_MODEL]
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
 
-    last_err = None
+    last_error = None
     for mi, model in enumerate(models):
         is_last = (mi == len(models) - 1)
         for attempt in range(GROQ_MAX_RETRIES):
             try:
-                return groq_client.chat.completions.create(
-                    messages=messages, model=model,
-                    temperature=temperature, max_tokens=max_tokens,
+                kwargs = dict(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                 )
+                # reasoning_effort только для gpt-oss (try/except)
+                if "gpt-oss" in model and reasoning_effort:
+                    try:
+                        r = groq_client.chat.completions.create(
+                            reasoning_effort=reasoning_effort, **kwargs
+                        )
+                    except TypeError:
+                        # старый SDK — без reasoning_effort
+                        r = groq_client.chat.completions.create(**kwargs)
+                else:
+                    r = groq_client.chat.completions.create(**kwargs)
+
+                msg = r.choices[0].message
+                content = (msg.content or "").strip()
+                finish = r.choices[0].finish_reason
+                reasoning = getattr(msg, "reasoning_content", None) or ""
+
+                if not content:
+                    print(f"      ⚠️  {model}: content пуст "
+                          f"(finish={finish}, reasoning={len(reasoning)} симв)")
+                    if is_last:
+                        return ""
+                    break  # -> fallback
+
+                return content
             except Exception as e:
-                last_err = e
                 err = str(e).lower()
-
-                # TPD — переключаемся на следующую модель
-                if "tokens per day" in err or "tpd" in err:
-                    short = model.split("/")[-1]
-                    if not is_last:
-                        next_short = models[mi + 1].split("/")[-1]
-                        print(f"      🔄 TPD [{label}] {short} → {next_short}")
-                        break
-                    raise RuntimeError(f"TPD exhausted on all models (last: {short}): {e}")
-
-                # TPM — retry с паузой
+                last_error = e
+                if ("tokens per day" in err or "tpd" in err) and not is_last:
+                    print(f"      🔄 TPD -> fallback")
+                    break
                 if ("429" in err or "rate_limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
-                    wait = 30 * (2 ** attempt)
+                    wait = 30
                     m = re.search(r'try again in ([\d.]+)s', str(e))
                     if m:
                         wait = max(float(m.group(1)) + 2, 5)
-                    print(f"      ⏸  429 [TPM {label}], {wait:.0f}с (попытка {attempt+1}/{GROQ_MAX_RETRIES})")
+                    print(f"      ⏸  429, {wait:.0f}с")
                     time.sleep(wait)
                     continue
-
                 raise
-
-    raise RuntimeError(f"Groq: exhausted all models: {last_err}")
-
-
-_SAFE_INPUT_CHARS = 14000
-_FALLBACK_INPUT_CHARS = 7000
+    raise RuntimeError(f"Groq exhausted: {last_error}")
 
 
-def _summarize_chunk(text, is_final):
-    if is_final:
-        prompt_template = """Аналитическая выжимка интервью на русском.
+def _extract_json(raw: str):
+    """JSON-массив из ответа LLM (чистый / в ```json / с текстом)."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r'\[.*\]', raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+    # Fallback: закрыть обрезанный массив
+    m = re.search(r'\[.*', raw, re.DOTALL)
+    if m:
+        partial = m.group(0).rstrip().rstrip(",")
+        for suffix in ("}]", "}]", "}]]", "]"):
+            try:
+                return json.loads(partial + suffix)
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def _summarize_chunk_with_citations(chunk: str, chunk_offset_sec: float = 0) -> list:
+    prompt = f"""Извлеки КЛЮЧЕВЫЕ ТЕЗИСЫ из фрагмента интервью.
+
+ТЕКСТ:
+---
+{chunk}
+---
 
 ПРАВИЛА:
-1. Игнорируй рубрики/заставки.
-2. Исправляй ошибки распознавания.
-3. Атрибуция: «по мнению эксперта» (не более 2 раз).
-4. Не приписывай страны/имена, которых нет.
-5. Без эмодзи, без * и - — только •.
+1. Каждый тезис — утверждение эксперта (мнение, прогноз, оценка).
+2. К тезису — ДОСЛОВНАЯ ЦИТАТА (не перефразируй).
+3. start — секунды от начала фрагмента.
+4. Если тезисов нет — верни [].
 
-Структура:
+Верни ТОЛЬКО JSON-массив, без markdown, без пояснений:
+[{{"claim": "...", "quote": "...", "start": 0.0}}]
 
-<b>ГЛАВНЫЙ ТЕЗИС</b>
-(1-2 предложения)
-
-<b>АРГУМЕНТЫ И ФАКТЫ</b>
-• (3-5)
-
-<b>ПРОГНОЗЫ И ОЦЕНКИ</b>
-• (если есть)
-
-Текст:
----
-{text}
----
-
-Выжимка:"""
-        max_tokens = SUMMARIZE_FINAL_TOKENS
-    else:
-        prompt_template = """Тезисы, аргументы, прогнозы. Кратко.
-Атрибуция: «эксперт утверждает». Списки — •.
-
----
-{text}
----
-
-Выжимка:"""
-        max_tokens = SUMMARIZE_PARTIAL_TOKENS
-
-    safe_text = text if len(text) <= _SAFE_INPUT_CHARS else text[:_SAFE_INPUT_CHARS]
-    prompt = prompt_template.replace("{text}", safe_text)
-
+JSON:"""
     try:
-        c = _call_groq_with_retry(
+        raw = _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.5, max_tokens=max_tokens, label="summarize",
+            max_tokens=SUMMARIZE_PARTIAL_TOKENS,
+            temperature=0.2,
+            reasoning_effort="low",
         )
-        return c.choices[0].message.content.strip()
+        if not raw:
+            print(f"      ⚠️  chunk: пустой ответ")
+            return []
+        data = _extract_json(raw)
+        if data is None:
+            print(f"      ⚠️  chunk: не JSON, raw={raw[:150]!r}")
+            return []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "start" in item:
+                    item["start"] = float(item.get("start", 0)) + chunk_offset_sec
+            return [item for item in data if isinstance(item, dict) and item.get("claim")]
     except Exception as e:
-        err = str(e).lower()
-        if "413" in err or "request_too_large" in err:
-            print(f"      ⚠️  413 на входе {len(safe_text)} символов — уменьшаю до {_FALLBACK_INPUT_CHARS}")
-            safe_text = text[:_FALLBACK_INPUT_CHARS]
-            prompt = prompt_template.replace("{text}", safe_text)
-            c = _call_groq_with_retry(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5, max_tokens=max_tokens, label="summarize-retry",
-            )
-            return c.choices[0].message.content.strip()
-        raise
+        print(f"      ⚠️  chunk: {type(e).__name__}: {e!r}")
+    return []
 
 
-def summarize_text(text):
-    if not text.strip():
-        raise ValueError("пустой текст")
-    CHUNK = SUMMARIZE_CHUNK_CHARS
-    if len(text) <= CHUNK:
-        return _summarize_chunk(text, is_final=True)
-    chunks = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)]
-    print(f"📄 Map-Reduce: {len(chunks)} частей (chunk={CHUNK}, final={SUMMARIZE_FINAL_TOKENS} tok)")
-    partials = []
-    for i, c in enumerate(chunks, 1):
-        print(f"   {i}/{len(chunks)}...")
-        partials.append(_summarize_chunk(c, is_final=False))
-        if i < len(chunks):
-            print(f"      ⏸  {GROQ_DELAY_BETWEEN_CHUNKS}с...")
+def summarize_text(transcript_text: str, transcript_segments: list = None) -> str:
+    if not transcript_text:
+        return "[]"
+
+    chunks = []
+    for i in range(0, len(transcript_text), SUMMARIZE_CHUNK_CHARS):
+        chunk = transcript_text[i:i + SUMMARIZE_CHUNK_CHARS]
+        offset = 0.0
+        if transcript_segments:
+            for seg in transcript_segments:
+                if len(" ".join(s.get("text", "") for s in transcript_segments[:transcript_segments.index(seg) + 1])) >= i:
+                    offset = float(seg.get("start", 0))
+                    break
+        chunks.append((chunk, offset))
+
+    all_claims = []
+    for idx, (chunk, off) in enumerate(chunks, 1):
+        print(f"      {idx}/{len(chunks)}...")
+        claims = _summarize_chunk_with_citations(chunk, off)
+        all_claims.extend(claims)
+        if idx < len(chunks):
             time.sleep(GROQ_DELAY_BETWEEN_CHUNKS)
-    return _summarize_chunk("\n\n---\n\n".join(partials), is_final=True)
+
+    if len(all_claims) > 50:
+        all_claims = all_claims[:50]
+
+    return json.dumps(all_claims, ensure_ascii=False)
 
 
-def _check_context_errors(summary, original):
-    ukr = ["рада", "зеленск", "киев", "украин", "київ"]
-    rus = ["дума", "путин", "кремл", "россий", "рф "]
-    tl, sl = original.lower(), summary.lower()
-    is_ukr = any(m in tl for m in ukr)
-    is_rus = any(m in tl for m in rus)
-    if is_ukr and not is_rus and "росси" in sl:
-        print("⚠️  подмена: Украина→Россия")
-    if is_rus and not is_ukr and "украин" in sl:
-        print("⚠️  подмена: Россия→Украина")
+def neutralize_title(title: str) -> str:
+    if not title:
+        return title
+    prompt = f"""Перепиши заголовок нейтрально, без эмоций и капса.
+
+ЗАГОЛОВОК: {title}
+
+Верни ТОЛЬКО переписанный заголовок (до 90 символов):"""
+    try:
+        return _call_groq_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100, temperature=0.3, reasoning_effort="low",
+        )
+    except Exception:
+        return title
+
+
+def generate_hashtags(expert_name: str, summary: str) -> str:
+    prompt = f"""Сгенерируй 3-5 хештегов.
+
+ЭКСПЕРТ: {expert_name}
+ТЕКСТ: {summary[:500]}
+
+Верни ТОЛЬКО хештеги через пробел (начиная с #):"""
+    try:
+        raw = _call_groq_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=80, temperature=0.3, reasoning_effort="low",
+        )
+        return raw.strip()
+    except Exception:
+        return ""
+
+
+def _check_context_errors(summary: str, transcript: str) -> str:
     return summary
+
+
+def _format_title(title: str) -> str:
+    return f"<b>{title}</b>" if title else ""

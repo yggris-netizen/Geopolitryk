@@ -275,7 +275,14 @@ def _get_video_durations(video_ids: list) -> dict:
 
 # ─── Форматирование ───────────────────────────────────────
 
-def _format_duration(seconds: int) -> str:
+def _format_duration(seconds) -> str:
+    """Форматирует секунды в HH:MM:SS (или MM:SS, если < 1 часа). Принимает int/float."""
+    if not seconds:
+        return ""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return ""
     if seconds < 3600:
         return f"{seconds // 60}:{seconds % 60:02d}"
     return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"

@@ -1,11 +1,15 @@
-"""Публикация выжимки в Telegram-канал + пайплайн обработки видео.
+"""Публикация выжимки в Telegram + пайплайн обработки видео.
 
-Voice fingerprinting + фильтрация шума + дедупликация имён.
+NLI-проверка: публикуются ТОЛЬКО verified тезисы (entailment).
+Неподтверждённые (not_found / contradiction / neutral) — убираются.
+Если verified пусто — не публиковать (no_verified_claims) + уведомление владельцу.
+
 pending_voices сохраняется ВСЕГДА (даже при NOTIFY_UNKNOWN_VOICES=False),
-уведомление владельцу — по флагу NOTIFY_UNKNOWN_VOICES.
+уведомление владельцу о незнакомцах — по флагу NOTIFY_UNKNOWN_VOICES.
 """
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -27,13 +31,16 @@ from db.pending_voices import save_pending
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
 from db.transcripts import get_cached_transcript, save_cached_transcript
-from db.transcripts_raw import save_transcript_raw
+from db.transcripts_raw import save_transcript_raw, get_transcript_raw_segments
 from handlers.voice_registration import build_unknown_notification
 from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
+from services.quote_extraction import extract_quotes
+from services.quote_formatter import format_quotes
+from services.quote_verifier import verify_quotes
 from services.summarization import (
-    generate_hashtags, neutralize_title, summarize_text,
-    _check_context_errors, _format_title,
+    generate_hashtags, neutralize_title,
+    _format_title,
 )
 from services.transcription import (
     CookiesExpiredError, download_audio, transcribe_audio,
@@ -96,6 +103,25 @@ def _speakers_block(experts: list[dict]) -> str:
 def _experts_as_string(experts: list[dict]) -> str:
     names = _unique_names(experts)
     return ", ".join(names) if names else "Неизвестный спикер"
+
+
+def _format_verified_summary(verified: list) -> str:
+    """Формирует текст из verified тезисов с таймкодами и цитатами."""
+    if not verified:
+        return ""
+    lines = []
+    for v in verified:
+        ts = _format_duration(v.get("start", 0))
+        claim = (v.get("claim") or "").strip()
+        quote = (v.get("quote") or "").strip()
+        if not claim:
+            continue
+        line = f"• <b>[{ts}]</b> {claim}"
+        if quote:
+            q = quote[:200] + ("…" if len(quote) > 200 else "")
+            line += f"\n<i>«{q}»</i>"
+        lines.append(line)
+    return "\n\n".join(lines)
 
 
 async def _notify_owner_text(text: str) -> None:
@@ -387,7 +413,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
             print(f"   ✅ {e['name']}{spk}")
         print()
 
-        # pending сохраняется ВСЕГДА, уведомление — по флагу
         if unknown:
             await notify_owner_about_unknown(
                 video_url, display_title, channel_name, unknown, vid,
@@ -407,16 +432,42 @@ async def process_and_publish(video_url, video_title="", video_description="",
             )
             print(f"💾 transcripts_raw сохранён ({len(transcript_segments)} сегментов)\n")
 
-        print("🧠 Шаг 3/4: Суммаризация...")
-        summary = summarize_text(transcript_text)
-        summary = _check_context_errors(summary, transcript_text)
-        print("✅ Готово\n")
+        # Если транскрипт из кеша — сегменты могли не загрузиться
+        if not transcript_segments and vid:
+            transcript_segments = get_transcript_raw_segments(vid)
+            if transcript_segments:
+                print(f"💾 сегменты из transcripts_raw: {len(transcript_segments)}\n")
+
+        print("🧠 Шаг 3/4: Суммаризация с цитатами...")
+        quotes_json = extract_quotes(transcript_text, transcript_segments)
+        try:
+            total_quotes = len(json.loads(quotes_json))
+        except Exception:
+            total_claims = 0
+        print(f"   Цитат: {total_quotes}")
+
+        print("🔍 NLI-проверка...")
+        verified, stats = verify_quotes(quotes_json, transcript_segments)
+        print(f"   Статистика: {stats}")
+
+        if not verified:
+            msg = (
+                f"⚠️ <b>Не публикую</b>: 0 verified тезисов\n\n"
+                f"🔗 {video_url}\n"
+                f"📊 {stats}"
+            )
+            await _notify_owner_text(msg)
+            print(f"❌ no_verified_claims: {stats}")
+            return False, "no_verified_claims"
+
+        summary_text = format_quotes(verified, transcript_segments)
+        print(f"✅ Verified: {len(verified)} цитат\n")
 
         print("📤 Шаг 4/4: Отправка...")
         await send_expert_post(
             video_url=video_url, video_title=display_title,
             experts=experts,
-            channel_name=channel_name, summary=summary,
+            channel_name=channel_name, summary=summary_text,
             published_at=published_at,
         )
         print("✅ Опубликовано\n")
@@ -426,7 +477,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
         if experts:
             main_speaker = experts[0].get("speaker", "") or ""
 
-        _save_summary(vid, experts_str, channel_name, summary,
+        _save_summary(vid, experts_str, channel_name, summary_text,
                       video_title=display_title, video_published_at=published_at)
         for e in experts:
             _mark_expert_seen_today(e["name"])
