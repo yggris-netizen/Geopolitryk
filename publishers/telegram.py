@@ -19,6 +19,7 @@ import traceback
 from aiogram.enums import ParseMode
 from aiogram.types import LinkPreviewOptions
 
+from config import QUOTE_PREVIEW_LEN, ERROR_PREVIEW_LEN
 from config import (
     CHANNEL_ID, DIAGNOSTIC_MODE, EXTRACT_PREDICTIONS,
     GENERATE_HASHTAGS, GROQ_PREDICTIONS_PAUSE,
@@ -118,7 +119,7 @@ def _format_verified_summary(verified: list) -> str:
             continue
         line = f"• <b>[{ts}]</b> {claim}"
         if quote:
-            q = quote[:200] + ("…" if len(quote) > 200 else "")
+            q = quote[:QUOTE_PREVIEW_LEN] + ("…" if len(quote) > QUOTE_PREVIEW_LEN else "")
             line += f"\n<i>«{q}»</i>"
         lines.append(line)
     return "\n\n".join(lines)
@@ -145,7 +146,7 @@ async def _notify_cookies_expired(video_url: str, error_text: str) -> None:
     _LAST_COOKIES_ALERT_TS = now
     text = (
         f"🍪 <b>Cookies протухли</b>\n\n"
-        f"Скачивание не работает: <code>{error_text[:200]}</code>\n\n"
+        f"Скачивание не работает: <code>{error_text[:ERROR_PREVIEW_LEN]}</code>\n\n"
         f"🔗 {video_url}\n\n"
         f"Обновите <code>cookies.txt</code> (Firefox → Get cookies.txt LOCALLY) "
         f"и положите рядом с <code>bot.py</code>."
@@ -373,8 +374,8 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 try:
                     os.remove(audio_file)
                     print("🧹 аудио удалено")
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️  cleanup audio: {e}")
             audio_file = None
 
             if vid and transcript_text:
@@ -509,6 +510,6 @@ async def process_and_publish(video_url, video_title="", video_description="",
         if audio_file and os.path.exists(audio_file):
             try:
                 os.remove(audio_file)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️  cleanup audio (error): {e}")
         return False, f"{err_type}: {err_msg}"

@@ -12,7 +12,7 @@ from config import (
     SUMMARIZE_CHUNK_CHARS, SUMMARIZE_FINAL_TOKENS,
     SUMMARIZE_PARTIAL_TOKENS,
 )
-from services.llm import groq_client
+from services.llm import groq_client, groq_chat_create
 
 
 def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effort="low", task="medium"):
@@ -35,14 +35,14 @@ def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effor
                 # reasoning_effort только для gpt-oss (try/except)
                 if "gpt-oss" in model and reasoning_effort:
                     try:
-                        r = groq_client.chat.completions.create(
+                        r = groq_chat_create(
                             reasoning_effort=reasoning_effort, **kwargs
                         )
                     except TypeError:
                         # старый SDK — без reasoning_effort
-                        r = groq_client.chat.completions.create(**kwargs)
+                        r = groq_chat_create(**kwargs)
                 else:
-                    r = groq_client.chat.completions.create(**kwargs)
+                    r = groq_chat_create(**kwargs)
 
                 msg = r.choices[0].message
                 content = (msg.content or "").strip()

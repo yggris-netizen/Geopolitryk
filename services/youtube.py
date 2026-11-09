@@ -315,8 +315,8 @@ def _fetch_videos_from_channel(channel_id: str, days_back: float) -> list:
                 dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
                 if dt < cutoff:
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"⚠️  date parse: {e}")
         if _is_video_processed(v["video_id"]):
             continue
         candidates.append(v)

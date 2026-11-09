@@ -10,9 +10,10 @@ except ImportError:
     FUZZY_AVAILABLE = False
 
 from scripts.verify_summary import _find_quote_in_segments
+from config import MAX_QUOTES
 
 DEDUP_THRESHOLD = 90
-MAX_QUOTES = 999
+# MAX_QUOTES импортируется из config
 MIN_QUOTE_LEN = 40
 
 # Мусорные фразы (приветствия, прощания, междометия)

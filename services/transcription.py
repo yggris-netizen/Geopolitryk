@@ -63,8 +63,8 @@ def _split_audio(src: str, chunk_seconds: int) -> list:
             if os.path.exists(out):
                 try:
                     os.remove(out)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️  cleanup chunk: {e}")
             break
         chunks.append(out)
         start += chunk_seconds
@@ -102,8 +102,8 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
             if os.path.exists(f):
                 try:
                     os.remove(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️  cleanup old audio: {e}")
 
     ydl_opts = {
         'format': 'bestaudio[abr<=96]/bestaudio/best',
@@ -194,8 +194,8 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
             if chunk != audio_path and os.path.exists(chunk):
                 try:
                     os.remove(chunk)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"⚠️  cleanup chunk: {e}")
 
     full = " ".join(full_text_parts).strip()
     return full, all_segments

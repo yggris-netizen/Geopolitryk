@@ -4,12 +4,28 @@
 Версия: v2.1.7-local (07.11.2026)
 - 7 каналов (убраны MayiakUA, Свободный, Легіст — неинформативны)
 - MAX_VIDEO_DURATION_SECONDS = 7200 (2 часа)
-- NOTIFY_UNKNOWN_VOICES = False (уведомления отключены, pending — всегда)
-"""
+- NOTIFY_UNKNOWN_VOICES = False (уведомления отключены, pending — всегда)"""
+
+# ─── P1.2: магические числа (вынесены из кода) ───────────────
+# expert_detection.py — negative check
+NEGATIVE_COS_THRESHOLD = 0.90
+NEGATIVE_DIFF_THRESHOLD = 0.03
+
+# quote_verifier.py — лимит цитат
+MAX_QUOTES = 999
+
+# summary_editor.py — D2: минимум символов (иначе fallback D1)
+D2_MIN_CHARS = 200
+
+# telegram.py — обрезка в публикации
+QUOTE_PREVIEW_LEN = 200
+ERROR_PREVIEW_LEN = 200
+
 
 import json
 import os
 import sys
+import atexit
 import tempfile
 
 try:
@@ -28,8 +44,18 @@ from services.environment import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-OWNER_USER_ID = int(os.getenv("OWNER_USER_ID", "0"))
+CHANNEL_ID_RAW = os.getenv("CHANNEL_ID", "0")
+try:
+    CHANNEL_ID = int(CHANNEL_ID_RAW)
+except ValueError:
+    print(f"❌ CHANNEL_ID={CHANNEL_ID_RAW!r} — не число. Проверьте .env")
+    sys.exit(1)
+OWNER_USER_ID_RAW = os.getenv("OWNER_USER_ID", "0")
+try:
+    OWNER_USER_ID = int(OWNER_USER_ID_RAW)
+except ValueError:
+    print(f"❌ OWNER_USER_ID={OWNER_USER_ID_RAW!r} — не число. Проверьте .env")
+    sys.exit(1)
 
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
@@ -90,6 +116,15 @@ if _creds_json:
     _creds_tmp.write(_creds_json)
     _creds_tmp.close()
     SERVICE_ACCOUNT_FILE = _creds_tmp.name
+    # P0.2: удалить tempfile при выходе (утечка секретов)
+    def _cleanup_temp_creds():
+        try:
+            if os.path.exists(SERVICE_ACCOUNT_FILE):
+                os.unlink(SERVICE_ACCOUNT_FILE)
+                print(f"🧹 Удалён tempfile: {SERVICE_ACCOUNT_FILE}")
+        except Exception as e:
+            print(f"⚠️  tempfile cleanup: {e}")
+    atexit.register(_cleanup_temp_creds)
 else:
     SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", _ENV_SA_PATH)
 
@@ -142,8 +177,8 @@ SUMMARIZE_CHUNK_CHARS = int(os.getenv("SUMMARIZE_CHUNK_CHARS", "5000"))
 SUMMARIZE_FINAL_TOKENS = int(os.getenv("SUMMARIZE_FINAL_TOKENS", "3000"))
 SUMMARIZE_PARTIAL_TOKENS = int(os.getenv("SUMMARIZE_PARTIAL_TOKENS", "4000"))
 
-GROQ_DELAY_BETWEEN_CHUNKS = int(os.getenv("GROQ_DELAY_BETWEEN_CHUNKS", "45"))
-GROQ_PREDICTIONS_PAUSE = int(os.getenv("GROQ_PREDICTIONS_PAUSE", "45"))
+GROQ_DELAY_BETWEEN_CHUNKS = int(os.getenv("GROQ_DELAY_BETWEEN_CHUNKS", "20"))  # P1.4: 45->20 (TPM 8000)
+GROQ_PREDICTIONS_PAUSE = int(os.getenv("GROQ_PREDICTIONS_PAUSE", "10"))  # P1.4: 45->10
 GROQ_MAX_RETRIES = int(os.getenv("GROQ_MAX_RETRIES", "5"))
 
 DISPLAY_TIMEZONE_OFFSET = 3

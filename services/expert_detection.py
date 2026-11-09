@@ -18,6 +18,10 @@ import numpy as np
 
 from db.voice_profiles import get_all_profiles
 from services.speaker_embedding import cosine_similarity
+from config import (
+    NEGATIVE_COS_THRESHOLD as NEGATIVE_COS_THRESHOLD_CONFIG,
+    NEGATIVE_DIFF_THRESHOLD as NEGATIVE_DIFF_THRESHOLD_CONFIG,
+)
 
 MIN_MATCH_DURATION_SEC = 20.0
 MIN_UNKNOWN_DURATION_SEC = 30.0
@@ -26,8 +30,8 @@ NEAR_MATCH_THRESHOLD = 0.70
 MATCH_THRESHOLD = 0.78
 
 # Negative check: если два профиля cos > 0.90 и diff score < 0.03 → неоднозначно
-NEGATIVE_COS_THRESHOLD = 0.90
-NEGATIVE_DIFF_THRESHOLD = 0.03
+NEGATIVE_COS_THRESHOLD = NEGATIVE_COS_THRESHOLD_CONFIG
+NEGATIVE_DIFF_THRESHOLD = NEGATIVE_DIFF_THRESHOLD_CONFIG
 
 
 def _find_top_n_matches(embedding, profiles: list, threshold: float, n: int = 2) -> list:

@@ -11,8 +11,9 @@
 
 import re
 
+from config import D2_MIN_CHARS
 from config import GROQ_TASK_MODELS, GROQ_FALLBACK_MODEL, GROQ_MODEL, SUMMARIZE_FINAL_TOKENS
-from services.llm import groq_client
+from services.llm import groq_client, groq_chat_create
 
 
 def _format_duration(seconds) -> str:
@@ -71,11 +72,11 @@ def _call_groq(prompt: str, max_tokens: int, task="high") -> str:
             )
             if "gpt-oss" in model:
                 try:
-                    r = groq_client.chat.completions.create(reasoning_effort="low", **kwargs)
+                    r = groq_chat_create(reasoning_effort="low", **kwargs)
                 except TypeError:
-                    r = groq_client.chat.completions.create(**kwargs)
+                    r = groq_chat_create(**kwargs)
             else:
-                r = groq_client.chat.completions.create(**kwargs)
+                r = groq_chat_create(**kwargs)
             content = (r.choices[0].message.content or "").strip()
             if content:
                 return content
@@ -124,8 +125,8 @@ def merge_verified_into_analytics(verified: list) -> str:
     if removed:
         print(f"      🔍 timestamp-check: удалено {removed} невалидных [MM:SS]")
 
-    if len(verified_text) < 200:
-        print(f"      ⚠️  editor: {len(verified_text)} < 200 -> fallback D1")
+    if len(verified_text) < D2_MIN_CHARS:
+        print(f"      ⚠️  editor: {len(verified_text)} < {D2_MIN_CHARS} -> fallback D1")
         from services.quote_formatter import format_quotes
         return format_quotes(verified)
 
