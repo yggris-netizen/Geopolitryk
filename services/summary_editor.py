@@ -11,7 +11,7 @@
 
 import re
 
-from config import GROQ_FALLBACK_MODEL, GROQ_MODEL, SUMMARIZE_FINAL_TOKENS
+from config import GROQ_TASK_MODELS, GROQ_FALLBACK_MODEL, GROQ_MODEL, SUMMARIZE_FINAL_TOKENS
 from services.llm import groq_client
 
 
@@ -57,8 +57,8 @@ def _build_prompt(verified: list) -> str:
 """
 
 
-def _call_groq(prompt: str, max_tokens: int) -> str:
-    models = [GROQ_MODEL]
+def _call_groq(prompt: str, max_tokens: int, task="high") -> str:
+    models = GROQ_TASK_MODELS.get(task, [GROQ_MODEL])
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
     for model in models:

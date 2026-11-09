@@ -5,6 +5,8 @@ import re
 import time
 
 from config import (
+    GROQ_EXTRA_MODELS,
+    GROQ_TASK_MODELS,
     GROQ_DELAY_BETWEEN_CHUNKS, GROQ_FALLBACK_MODEL,
     GROQ_MAX_RETRIES, GROQ_MODEL,
     SUMMARIZE_CHUNK_CHARS, SUMMARIZE_FINAL_TOKENS,
@@ -13,9 +15,9 @@ from config import (
 from services.llm import groq_client
 
 
-def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effort="low"):
+def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effort="low", task="medium"):
     """Groq с каскадом (20b -> 120b), retry при TPM, reasoning_effort='low'."""
-    models = [GROQ_MODEL]
+    models = GROQ_TASK_MODELS.get(task, [GROQ_MODEL] + GROQ_EXTRA_MODELS)
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
 
@@ -188,7 +190,9 @@ def neutralize_title(title: str) -> str:
         return _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=100, temperature=0.3, reasoning_effort="low",
+            task="low",
         )
+
     except Exception:
         return title
 
@@ -204,7 +208,9 @@ def generate_hashtags(expert_name: str, summary: str) -> str:
         raw = _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=80, temperature=0.3, reasoning_effort="low",
+            task="low",
         )
+
         return raw.strip()
     except Exception:
         return ""

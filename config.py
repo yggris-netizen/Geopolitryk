@@ -18,6 +18,13 @@ try:
 except ImportError:
     pass
 
+from services.environment import (
+    BOT_ENV, IS_SERVER, IS_WINDOWS, IS_LINUX,
+    DB_PATH as _ENV_DB_PATH,
+    SERVICE_ACCOUNT_PATH as _ENV_SA_PATH,
+    PROXY_URL, GROQ_API_BASE,
+)
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
@@ -29,6 +36,23 @@ GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
+
+# Дополнительные модели для каскада (free tier: +200K +300K TPD)
+GROQ_EXTRA_MODELS = [
+    "qwen/qwen3.8-27b",
+]
+
+# Маршрутизация задач по моделям (бесплатные)
+# low    — простые (нейтрализация, хештеги) -> 20b
+# medium — средние (извлечение цитат) -> 120b
+# high   — сложные (прогнозы, аналитика) -> kimi
+GROQ_TASK_MODELS = {
+    "low":    ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
+    "medium": ["openai/gpt-oss-120b", "qwen/qwen3.8-27b"],
+    "high":   ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+}
+
+
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
 DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
@@ -67,7 +91,7 @@ if _creds_json:
     _creds_tmp.close()
     SERVICE_ACCOUNT_FILE = _creds_tmp.name
 else:
-    SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "service_account.json")
+    SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", _ENV_SA_PATH)
 
 
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
@@ -87,7 +111,7 @@ TEST_VIDEO_URL = ""
 TEST_VIDEO_TITLE = ""
 
 VIDEO_LANGUAGE = "ru"
-DB_PATH = os.getenv("DB_PATH", "seen_videos.db")
+DB_PATH = os.getenv("DB_PATH", _ENV_DB_PATH)
 
 CHECK_INTERVAL_HOURS = 3
 WORKER_POLL_INTERVAL = 5

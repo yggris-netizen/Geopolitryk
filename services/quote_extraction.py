@@ -39,7 +39,7 @@ JSON:"""
             max_tokens=SUMMARIZE_PARTIAL_TOKENS,
             temperature=0.2,
             reasoning_effort="low",
-        )
+            task="medium")
         if not raw:
             print(f"      ⚠️  quotes: пустой ответ")
             return []
