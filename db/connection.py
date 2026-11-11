@@ -138,7 +138,7 @@ def _init_db():
         conn.execute("SELECT speaker_id FROM pending_voices LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE pending_voices ADD COLUMN speaker_id TEXT DEFAULT ''")
-        print("🔄 Миграция: добавлена колонка pending_voices.speaker_id")
+        print("[RETRY] Миграция: добавлена колонка pending_voices.speaker_id")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS task_queue (
@@ -166,32 +166,32 @@ def _init_db():
         conn.execute("SELECT video_published_at FROM task_queue LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE task_queue ADD COLUMN video_published_at TEXT")
-        print("🔄 Миграция: добавлена колонка video_published_at")
+        print("[RETRY] Миграция: добавлена колонка video_published_at")
 
     try:
         conn.execute("SELECT next_retry_at FROM task_queue LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
-        print("🔄 Миграция: добавлена колонка next_retry_at")
+        print("[RETRY] Миграция: добавлена колонка next_retry_at")
 
     # Миграции для predictions (source_url, fact_check_date, speaker_id)
     try:
         conn.execute("SELECT source_url FROM predictions LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE predictions ADD COLUMN source_url TEXT")
-        print("🔄 Миграция: добавлена колонка predictions.source_url")
+        print("[RETRY] Миграция: добавлена колонка predictions.source_url")
 
     try:
         conn.execute("SELECT fact_check_date FROM predictions LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE predictions ADD COLUMN fact_check_date TIMESTAMP")
-        print("🔄 Миграция: добавлена колонка predictions.fact_check_date")
+        print("[RETRY] Миграция: добавлена колонка predictions.fact_check_date")
 
     try:
         conn.execute("SELECT speaker_id FROM predictions LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE predictions ADD COLUMN speaker_id TEXT")
-        print("🔄 Миграция: добавлена колонка predictions.speaker_id")
+        print("[RETRY] Миграция: добавлена колонка predictions.speaker_id")
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_status ON task_queue(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority DESC, created_at)")
@@ -203,7 +203,7 @@ def _init_db():
         "WHERE status = 'processing'"
     ).rowcount
     if n_reset:
-        print(f"🔄 Сброшено зависших processing → pending: {n_reset}")
+        print(f"[RETRY] Сброшено зависших processing → pending: {n_reset}")
 
     n_max = conn.execute(
         "UPDATE task_queue SET status = 'error', "

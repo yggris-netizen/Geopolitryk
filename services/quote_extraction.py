@@ -41,11 +41,11 @@ JSON:"""
             reasoning_effort="low",
             task="medium")
         if not raw:
-            print(f"      ⚠️  quotes: пустой ответ")
+            print(f"      [WARN]  quotes: пустой ответ")
             return []
         data = _extract_json(raw)
         if data is None:
-            print(f"      ⚠️  quotes: не JSON, raw={raw[:150]!r}")
+            print(f"      [WARN]  quotes: не JSON, raw={raw[:150]!r}")
             return []
         if isinstance(data, list):
             for item in data:
@@ -53,7 +53,7 @@ JSON:"""
                     item["start"] = float(item.get("start", 0)) + chunk_offset_sec
             return [item for item in data if isinstance(item, dict) and item.get("quote")]
     except Exception as e:
-        print(f"      ⚠️  quotes: {type(e).__name__}: {e!r}")
+        print(f"      [WARN]  quotes: {type(e).__name__}: {e!r}")
     return []
 
 

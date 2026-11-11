@@ -28,12 +28,12 @@ if WHISPER_MODE == "local":
             WHISPER_MODEL_SIZE, device="cpu", compute_type="int8",
             cpu_threads=1, num_workers=1,
         )
-        print("✅ Whisper OK")
+        print("[OK] Whisper OK")
     except Exception as _e:
-        print(f"❌ Whisper: {_e}")
+        print(f"[ERR] Whisper: {_e}")
         raise
 else:
-    print("✅ Groq Whisper API (без локальной модели)")
+    print("[OK] Groq Whisper API (без локальной модели)")
 
 
 def _split_audio(src: str, chunk_seconds: int) -> list:
@@ -50,21 +50,21 @@ def _split_audio(src: str, chunk_seconds: int) -> list:
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=180)
         except FileNotFoundError:
-            print("   ❌ ffmpeg НЕ НАЙДЕН в PATH.")
+            print("   [ERR] ffmpeg НЕ НАЙДЕН в PATH.")
             break
         except subprocess.CalledProcessError as e:
             err_tail = (e.stderr or b"")[-300:].decode("utf-8", errors="ignore")
-            print(f"   ⚠️  ffmpeg split (start={start}): {err_tail}")
+            print(f"   [WARN]  ffmpeg split (start={start}): {err_tail}")
             break
         except Exception as e:
-            print(f"   ⚠️  ffmpeg split: {e}")
+            print(f"   [WARN]  ffmpeg split: {e}")
             break
         if not os.path.exists(out) or os.path.getsize(out) < 1024:
             if os.path.exists(out):
                 try:
                     os.remove(out)
                 except Exception as e:
-                    print(f"⚠️  cleanup chunk: {e}")
+                    print(f"[WARN]  cleanup chunk: {e}")
             break
         chunks.append(out)
         start += chunk_seconds
@@ -103,7 +103,7 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
                 try:
                     os.remove(f)
                 except Exception as e:
-                    print(f"⚠️  cleanup old audio: {e}")
+                    print(f"[WARN]  cleanup old audio: {e}")
 
     ydl_opts = {
         'format': 'bestaudio[abr<=96]/bestaudio/best',
@@ -135,11 +135,11 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
 def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
     """Возвращает (text, segments). segments = [{start, end, text}]."""
     file_size_mb = os.path.getsize(audio_path) / 1024 / 1024
-    print(f"   📁 Размер: {file_size_mb:.1f} MB")
+    print(f"   [DIR] Размер: {file_size_mb:.1f} MB")
 
     chunks = []
     if file_size_mb > GROQ_MAX_SIZE_MB:
-        print(f"   ✂️  нарезаю по {GROQ_MAX_CHUNK_SECONDS}с...")
+        print(f"   [CUT]  нарезаю по {GROQ_MAX_CHUNK_SECONDS}с...")
         chunks = _split_audio(audio_path, GROQ_MAX_CHUNK_SECONDS)
         if not chunks:
             raise RuntimeError(
@@ -156,7 +156,7 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
     else:
         chunks = [audio_path]
 
-    print(f"   📤 Отправляю {len(chunks)} кусков в Groq...")
+    print(f"   [UL] Отправляю {len(chunks)} кусков в Groq...")
     full_text_parts = []
     all_segments = []
     offset_sec = 0.0
@@ -174,7 +174,7 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
                 )
             chunk_text = (getattr(r, "text", "") or "").strip()
             chunk_segments = getattr(r, "segments", None) or []
-            print(f"   ✅ {len(chunk_text)} символов, {len(chunk_segments)} сегментов")
+            print(f"   [OK] {len(chunk_text)} символов, {len(chunk_segments)} сегментов")
             full_text_parts.append(chunk_text)
             for seg in chunk_segments:
                 if isinstance(seg, dict):
@@ -188,14 +188,14 @@ def _transcribe_groq(audio_path: str, total_duration: float = 0) -> tuple:
                 all_segments.append({"start": s_start, "end": s_end, "text": s_text})
             offset_sec += chunk_seconds_for(chunk, total_duration)
         except Exception as e:
-            print(f"   ❌ Groq chunk {i}: {e}")
+            print(f"   [ERR] Groq chunk {i}: {e}")
             raise
         finally:
             if chunk != audio_path and os.path.exists(chunk):
                 try:
                     os.remove(chunk)
                 except Exception as e:
-                    print(f"⚠️  cleanup chunk: {e}")
+                    print(f"[WARN]  cleanup chunk: {e}")
 
     full = " ".join(full_text_parts).strip()
     return full, all_segments

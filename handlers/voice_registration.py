@@ -1,9 +1,9 @@
 """FSM-хендлер для разметки незнакомых голосов.
 
 Уведомление:
-✅ Уже распознаны: A, B (если есть)
-🎤 Незнакомые голоса: ...
-[✅ Спикер] [⏭ Пропустить]
+[OK] Уже распознаны: A, B (если есть)
+[MIC] Незнакомые голоса: ...
+[[OK] Спикер] [[SKIP] Пропустить]
 
 При «Спикер» → FSM: только ФИО → сохранить в voice_profiles (role="guest").
 При «Пропустить» → mark_resolved(ignored).
@@ -42,9 +42,9 @@ def build_unknown_notification(video_url: str, video_title: str,
     pending_list: [{"id", "speaker_id", "duration_sec"}] — незнакомые.
     """
     lines = [
-        "🎤 <b>Незнакомые голоса</b>",
-        f"📺 {video_title[:80]}",
-        f"🔗 {video_url}",
+        "[MIC] <b>Незнакомые голоса</b>",
+        f"[TV] {video_title[:80]}",
+        f"[LINK] {video_url}",
     ]
 
     # Блок «Уже распознаны» — чтобы не размечать повторно
@@ -52,7 +52,7 @@ def build_unknown_notification(video_url: str, video_title: str,
         names = [e["name"] for e in known_experts if e.get("name")]
         if names:
             lines.append("")
-            lines.append(f"✅ <b>Уже распознаны:</b> {', '.join(names)}")
+            lines.append(f"[OK] <b>Уже распознаны:</b> {', '.join(names)}")
 
     lines.append("")
     lines.append("Разметьте каждый незнакомый голос:")
@@ -66,9 +66,9 @@ def build_unknown_notification(video_url: str, video_title: str,
         pid = p["id"]
         spk = p.get("speaker_id") or "?"
         keyboard.append([
-            InlineKeyboardButton(text=f"✅ {spk} — Спикер",
+            InlineKeyboardButton(text=f"[OK] {spk} — Спикер",
                                  callback_data=f"voice:speaker:{pid}"),
-            InlineKeyboardButton(text=f"⏭ {spk} — Пропустить",
+            InlineKeyboardButton(text=f"[SKIP] {spk} — Пропустить",
                                  callback_data=f"voice:skip:{pid}"),
         ])
 
@@ -95,7 +95,7 @@ async def on_voice_role(callback: CallbackQuery, state: FSMContext):
     if not pending:
         try:
             await callback.message.edit_text(
-                callback.message.text + "\n\n❌ Голос не найден (уже размечен?)"
+                callback.message.text + "\n\n[ERR] Голос не найден (уже размечен?)"
             )
         except Exception:
             pass
@@ -107,7 +107,7 @@ async def on_voice_role(callback: CallbackQuery, state: FSMContext):
         mark_resolved(pid, "ignored")
         try:
             await callback.message.edit_text(
-                callback.message.text + f"\n\n⏭ {spk} — пропущен"
+                callback.message.text + f"\n\n[SKIP] {spk} — пропущен"
             )
         except Exception:
             pass
@@ -134,7 +134,7 @@ async def on_voice_name(message: Message, state: FSMContext):
 
     name = (message.text or "").strip()
     if not name or len(name) < 3 or len(name) > 60:
-        await message.answer("❌ ФИО: от 3 до 60 символов. Попробуйте ещё раз:")
+        await message.answer("[ERR] ФИО: от 3 до 60 символов. Попробуйте ещё раз:")
         return
 
     data = await state.get_data()
@@ -142,7 +142,7 @@ async def on_voice_name(message: Message, state: FSMContext):
     spk = data.get("speaker_id", "?")
     pending = get_pending_by_id(pid) if pid else None
     if not pending:
-        await message.answer("❌ Голос не найден")
+        await message.answer("[ERR] Голос не найден")
         await state.clear()
         return
 
@@ -153,5 +153,5 @@ async def on_voice_name(message: Message, state: FSMContext):
         source_video_id=pending.get("video_id", ""),
     )
     mark_resolved(pid, "resolved")
-    await message.answer(f"✅ Спикер <b>{name}</b> ({spk}) сохранён")
+    await message.answer(f"[OK] Спикер <b>{name}</b> ({spk}) сохранён")
     await state.clear()

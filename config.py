@@ -48,13 +48,13 @@ CHANNEL_ID_RAW = os.getenv("CHANNEL_ID", "0")
 try:
     CHANNEL_ID = int(CHANNEL_ID_RAW)
 except ValueError:
-    print(f"❌ CHANNEL_ID={CHANNEL_ID_RAW!r} — не число. Проверьте .env")
+    print(f"[ERR] CHANNEL_ID={CHANNEL_ID_RAW!r} — не число. Проверьте .env")
     sys.exit(1)
 OWNER_USER_ID_RAW = os.getenv("OWNER_USER_ID", "0")
 try:
     OWNER_USER_ID = int(OWNER_USER_ID_RAW)
 except ValueError:
-    print(f"❌ OWNER_USER_ID={OWNER_USER_ID_RAW!r} — не число. Проверьте .env")
+    print(f"[ERR] OWNER_USER_ID={OWNER_USER_ID_RAW!r} — не число. Проверьте .env")
     sys.exit(1)
 
 WHISPER_MODE = os.getenv("WHISPER_MODE", "groq")
@@ -108,7 +108,7 @@ if _creds_json:
         if not isinstance(_parsed_creds, dict) or "type" not in _parsed_creds:
             raise ValueError("JSON не содержит поля 'type'")
     except json.JSONDecodeError as _e:
-        print(f"❌ GOOGLE_CREDENTIALS_JSON невалиден: {_e}")
+        print(f"[ERR] GOOGLE_CREDENTIALS_JSON невалиден: {_e}")
         print(f"   Первые 80 символов: {_creds_json[:80]!r}")
         sys.exit(1)
     _creds_json = json.dumps(_parsed_creds, ensure_ascii=False)
@@ -123,7 +123,7 @@ if _creds_json:
                 os.unlink(SERVICE_ACCOUNT_FILE)
                 print(f"🧹 Удалён tempfile: {SERVICE_ACCOUNT_FILE}")
         except Exception as e:
-            print(f"⚠️  tempfile cleanup: {e}")
+            print(f"[WARN]  tempfile cleanup: {e}")
     atexit.register(_cleanup_temp_creds)
 else:
     SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", _ENV_SA_PATH)
@@ -176,6 +176,18 @@ MAX_PREDICTION_HORIZON_YEARS = 5
 SUMMARIZE_CHUNK_CHARS = int(os.getenv("SUMMARIZE_CHUNK_CHARS", "5000"))
 SUMMARIZE_FINAL_TOKENS = int(os.getenv("SUMMARIZE_FINAL_TOKENS", "3000"))
 SUMMARIZE_PARTIAL_TOKENS = int(os.getenv("SUMMARIZE_PARTIAL_TOKENS", "4000"))
+
+# ─── D3: commentary (Map-Reduce, без NLI) ───────────────────
+COMMENTARY_CHUNK_CHARS = int(os.getenv("COMMENTARY_CHUNK_CHARS", "5000"))
+COMMENTARY_FINAL_TOKENS = int(os.getenv("COMMENTARY_FINAL_TOKENS", "3000"))
+COMMENTARY_MIN_CHARS = int(os.getenv("COMMENTARY_MIN_CHARS", "500"))
+
+# ─── D3 consensus: dual-model (разные модели для проходов) ──
+DUAL_MODEL_TASKS = {
+    "pass1": "medium",   # 120b -> qwen
+    "pass2": "high",     # qwen -> 120b -> 20b
+}
+MAX_COMMENTARY_QUOTES = int(os.getenv("MAX_COMMENTARY_QUOTES", "3"))
 
 GROQ_DELAY_BETWEEN_CHUNKS = int(os.getenv("GROQ_DELAY_BETWEEN_CHUNKS", "20"))  # P1.4: 45->20 (TPM 8000)
 GROQ_PREDICTIONS_PAUSE = int(os.getenv("GROQ_PREDICTIONS_PAUSE", "10"))  # P1.4: 45->10

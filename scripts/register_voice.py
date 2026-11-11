@@ -41,17 +41,17 @@ def main():
     args = parser.parse_args()
 
     _init_db()
-    print(f"📊 Профилей в БД до: {count_profiles()}")
+    print(f"[STAT] Профилей в БД до: {count_profiles()}")
 
     audio_path = args.audio
     if args.video:
         from services.transcription import download_audio
-        print(f"📥 Скачиваю аудио из {args.video}...")
+        print(f"[DL] Скачиваю аудио из {args.video}...")
         audio_path = download_audio(args.video)
-        print(f"✅ Скачано: {audio_path}")
+        print(f"[OK] Скачано: {audio_path}")
 
     if not audio_path or not os.path.exists(audio_path):
-        print(f"❌ Аудио не найдено: {audio_path}")
+        print(f"[ERR] Аудио не найдено: {audio_path}")
         sys.exit(1)
 
     start = args.start
@@ -59,12 +59,12 @@ def main():
     if end is None:
         end = start + (args.duration or 60)
 
-    print(f"🎤 Извлекаю embedding из {start:.0f}–{end:.0f}с...")
+    print(f"[MIC] Извлекаю embedding из {start:.0f}–{end:.0f}с...")
     emb = get_embedding(audio_path, start, end)
     if emb is None:
-        print("❌ Не удалось извлечь embedding")
+        print("[ERR] Не удалось извлечь embedding")
         sys.exit(1)
-    print(f"✅ Embedding: {emb.shape}")
+    print(f"[OK] Embedding: {emb.shape}")
 
     pid = save_voice_profile(
         name=args.name, bio=args.bio, role=args.role,
@@ -72,9 +72,9 @@ def main():
         source_video_id=args.video or "",
     )
     if pid:
-        print(f"✅ Сохранён профиль #{pid}: {args.name} ({args.role})")
+        print(f"[OK] Сохранён профиль #{pid}: {args.name} ({args.role})")
     else:
-        print("❌ Не удалось сохранить")
+        print("[ERR] Не удалось сохранить")
         sys.exit(1)
 
     # Удаляем скачанное аудио (если скачивали)
@@ -85,7 +85,7 @@ def main():
         except Exception:
             pass
 
-    print(f"📊 Профилей в БД после: {count_profiles()}")
+    print(f"[STAT] Профилей в БД после: {count_profiles()}")
 
 
 if __name__ == "__main__":

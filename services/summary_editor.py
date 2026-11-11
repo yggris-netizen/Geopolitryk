@@ -81,7 +81,7 @@ def _call_groq(prompt: str, max_tokens: int, task="high") -> str:
             if content:
                 return content
         except Exception as e:
-            print(f"      ⚠️  editor ({model}): {type(e).__name__}: {e!r}")
+            print(f"      [WARN]  editor ({model}): {type(e).__name__}: {e!r}")
             continue
     return ""
 
@@ -114,7 +114,7 @@ def merge_verified_into_analytics(verified: list) -> str:
     prompt = _build_prompt(verified)
     text = _call_groq(prompt, max_tokens=SUMMARIZE_FINAL_TOKENS)
     if not text:
-        print("      ⚠️  editor: пусто -> fallback D1")
+        print("      [WARN]  editor: пусто -> fallback D1")
         from services.quote_formatter import format_quotes
         return format_quotes(verified)
 
@@ -123,10 +123,10 @@ def merge_verified_into_analytics(verified: list) -> str:
 
     verified_text, removed = _verify_timestamps(text, verified)
     if removed:
-        print(f"      🔍 timestamp-check: удалено {removed} невалидных [MM:SS]")
+        print(f"      [SEARCH] timestamp-check: удалено {removed} невалидных [MM:SS]")
 
     if len(verified_text) < D2_MIN_CHARS:
-        print(f"      ⚠️  editor: {len(verified_text)} < {D2_MIN_CHARS} -> fallback D1")
+        print(f"      [WARN]  editor: {len(verified_text)} < {D2_MIN_CHARS} -> fallback D1")
         from services.quote_formatter import format_quotes
         return format_quotes(verified)
 

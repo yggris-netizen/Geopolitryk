@@ -42,7 +42,7 @@ def save_cached_transcript(video_id: str, transcript: str) -> bool:
         conn.commit()
         return True
     except Exception as e:
-        print(f"⚠️  save_cached_transcript: {e}")
+        print(f"[WARN]  save_cached_transcript: {e}")
         return False
     finally:
         conn.close()

@@ -79,12 +79,12 @@ def _get_uploads_playlist_id(channel_id: str) -> str:
         response = youtube.channels().list(part="contentDetails", id=channel_id).execute()
     except HttpError as e:
         if _is_quota_error(e):
-            print(f"   ⚠️  quotaExceeded в channels.list")
+            print(f"   [WARN]  quotaExceeded в channels.list")
         else:
-            print(f"   ❌ channels.list: {e}")
+            print(f"   [ERR] channels.list: {e}")
         return ""
     except Exception as e:
-        print(f"   ❌ channels.list: {e}")
+        print(f"   [ERR] channels.list: {e}")
         return ""
     items = response.get("items", [])
     if not items:
@@ -92,7 +92,7 @@ def _get_uploads_playlist_id(channel_id: str) -> str:
     uploads_id = items[0].get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads", "")
     if uploads_id:
         _YOUTUBE_UPLOADS_CACHE[channel_id] = uploads_id
-        print(f"   🔑 uploads playlist: {uploads_id}")
+        print(f"   [KEY] uploads playlist: {uploads_id}")
     return uploads_id
 
 
@@ -103,15 +103,15 @@ def _get_channel_videos_rss(channel_id: str) -> list:
         resp.raise_for_status()
         xml_text = resp.text
     except httpx.TimeoutException as e:
-        print(f"   ⏱  RSS timeout (30с): {e}")
+        print(f"   [TIME]  RSS timeout (30с): {e}")
         return []
     except Exception as e:
-        print(f"   ❌ RSS fetch: {e}")
+        print(f"   [ERR] RSS fetch: {e}")
         return []
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
-        print(f"   ❌ RSS parse: {e}")
+        print(f"   [ERR] RSS parse: {e}")
         return []
     ns = {
         "atom": "http://www.w3.org/2005/Atom",
@@ -137,7 +137,7 @@ def _get_channel_videos_rss(channel_id: str) -> list:
             })
         except Exception:
             continue
-    print(f"   📡 RSS: получено {len(videos)} (без квоты)")
+    print(f"   [RSS] RSS: получено {len(videos)} (без квоты)")
     return videos
 
 
@@ -147,20 +147,20 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
     if cached:
         ts, videos = cached
         if now - ts < YOUTUBE_VIDEOS_CACHE_TTL:
-            print(f"   💾 кэш видео ({len(videos)} шт., {int(now - ts)}с назад)")
+            print(f"   [SAVE] кэш видео ({len(videos)} шт., {int(now - ts)}с назад)")
             return videos
 
-    print(f"   📡 RSS-first discovery")
+    print(f"   [RSS] RSS-first discovery")
     videos = _get_channel_videos_rss(channel_id)
     if videos:
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, videos)
         _maybe_trim_caches()
         return videos
 
-    print(f"   🔄 RSS пуст → API fallback")
+    print(f"   [RETRY] RSS пуст → API fallback")
     uploads_id = _get_uploads_playlist_id(channel_id)
     if not uploads_id:
-        print(f"   ❌ API: uploads playlist не получен")
+        print(f"   [ERR] API: uploads playlist не получен")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
         _maybe_trim_caches()
         return []
@@ -173,12 +173,12 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
             maxResults=min(max_results, 50),
         ).execute()
     except HttpError as e:
-        print(f"   ❌ playlistItems.list: {e}")
+        print(f"   [ERR] playlistItems.list: {e}")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
         _maybe_trim_caches()
         return []
     except Exception as e:
-        print(f"   ❌ playlistItems.list: {e}")
+        print(f"   [ERR] playlistItems.list: {e}")
         _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, [])
         _maybe_trim_caches()
         return []
@@ -203,7 +203,7 @@ def _get_channel_videos_raw(channel_id: str, max_results: int = 50) -> list:
 
     _YOUTUBE_VIDEOS_CACHE[channel_id] = (now, videos)
     _maybe_trim_caches()
-    print(f"   📡 playlistItems (fallback): получено {len(videos)}")
+    print(f"   [RSS] playlistItems (fallback): получено {len(videos)}")
     return videos
 
 
@@ -234,7 +234,7 @@ def _get_video_durations(video_ids: list) -> dict:
         uncached.append(vid)
 
     if not uncached:
-        print(f"   💾 длительности из кэша: {len(durations)}")
+        print(f"   [SAVE] длительности из кэша: {len(durations)}")
         return durations
 
     for i in range(0, len(uncached), 50):
@@ -250,10 +250,10 @@ def _get_video_durations(video_ids: list) -> dict:
                 dur = _parse_iso_duration(dur_str)
                 durations[vid] = dur
                 _YOUTUBE_DURATIONS_CACHE[vid] = (now, dur)
-            print(f"   📡 videos.list: получено {len(batch)} длительностей")
+            print(f"   [RSS] videos.list: получено {len(batch)} длительностей")
         except HttpError as e:
             if _is_quota_error(e):
-                print(f"   ⚠️  quotaExceeded в videos.list — yt-dlp fallback")
+                print(f"   [WARN]  quotaExceeded в videos.list — yt-dlp fallback")
                 for vid in batch[:5]:
                     if vid in durations:
                         continue
@@ -265,9 +265,9 @@ def _get_video_durations(video_ids: list) -> dict:
                     except Exception:
                         durations[vid] = 0
             else:
-                print(f"   ⚠️  durations: {e}")
+                print(f"   [WARN]  durations: {e}")
         except Exception as e:
-            print(f"   ⚠️  durations: {e}")
+            print(f"   [WARN]  durations: {e}")
 
     _maybe_trim_caches()
     return durations
@@ -316,7 +316,7 @@ def _fetch_videos_from_channel(channel_id: str, days_back: float) -> list:
                 if dt < cutoff:
                     continue
             except Exception as e:
-                print(f"⚠️  date parse: {e}")
+                print(f"[WARN]  date parse: {e}")
         if _is_video_processed(v["video_id"]):
             continue
         candidates.append(v)
@@ -327,13 +327,13 @@ def _fetch_videos_from_channel(channel_id: str, days_back: float) -> list:
     for video in candidates:
         dur = durations.get(video["video_id"], 0)
         if dur == 0:
-            print(f"   ⏭  нет длительности: {video['title'][:60]}")
+            print(f"   [SKIP]  нет длительности: {video['title'][:60]}")
             continue
         if dur < MIN_VIDEO_DURATION_SECONDS:
-            print(f"   ⏭  короткое ({_format_duration(dur)}): {video['title'][:60]}")
+            print(f"   [SKIP]  короткое ({_format_duration(dur)}): {video['title'][:60]}")
             continue
         if dur > MAX_VIDEO_DURATION_SECONDS:
-            print(f"   ⏭  длинное ({_format_duration(dur)}): {video['title'][:60]}")
+            print(f"   [SKIP]  длинное ({_format_duration(dur)}): {video['title'][:60]}")
             continue
         video["duration_seconds"] = dur
         filtered.append(video)
@@ -343,9 +343,9 @@ def _fetch_videos_from_channel(channel_id: str, days_back: float) -> list:
 def get_new_videos_from_channel(channel_id: str) -> list:
     videos = _fetch_videos_from_channel(channel_id, DAYS_BACK)
     if videos:
-        print(f"   📅 Окно: последние {HOURS_BACK} ч — найдено {len(videos)}")
+        print(f"   [DATE] Окно: последние {HOURS_BACK} ч — найдено {len(videos)}")
     else:
-        print(f"   📭 За {HOURS_BACK} ч новых нет")
+        print(f"   [EMPTY] За {HOURS_BACK} ч новых нет")
     return videos
 
 
@@ -376,7 +376,7 @@ def get_video_info_ytdlp(url: str) -> dict:
                 "published_at": published_at,
             }
     except Exception as e:
-        print(f"⚠️  yt-dlp: {e}")
+        print(f"[WARN]  yt-dlp: {e}")
         return {"title": "", "duration": 0, "channel": "", "description": "", "published_at": ""}
 
 

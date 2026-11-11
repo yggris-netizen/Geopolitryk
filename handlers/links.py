@@ -36,15 +36,15 @@ async def on_text(message: Message):
     vid = _extract_video_id(url)
 
     if vid and _is_video_processed(vid):
-        await message.answer("⚠️ Уже обработано ранее")
+        await message.answer("[WARN] Уже обработано ранее")
         return
 
     tid = _add_task_to_queue(video_url=url, video_id=vid, priority=10, source="telegram")
     if tid:
         await message.answer(
-            f"✅ Добавлено: <b>#{tid}</b>\n"
+            f"[OK] Добавлено: <b>#{tid}</b>\n"
             f"Приоритет: 10 (ручная)\n"
             f"Обработается после текущей задачи"
         )
     else:
-        await message.answer("⏭ Уже в очереди")
+        await message.answer("[SKIP] Уже в очереди")

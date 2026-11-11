@@ -56,19 +56,19 @@ async def check_all_channels(shutdown_event=None):
 
     for ch in channels_shuffled:
         if shutdown_event is not None and shutdown_event.is_set():
-            print("⏹ Shutdown — прерываю автоцикл")
+            print("[STOP] Shutdown — прерываю автоцикл")
             break
-        print(f"\n📺 {ch['name']}")
+        print(f"\n[TV] {ch['name']}")
         try:
             videos = get_new_videos_from_channel(ch["id"])
         except Exception as e:
-            print(f"   ❌ {e}")
+            print(f"   [ERR] {e}")
             continue
         if not videos:
             print("   новых нет")
             continue
         if len(videos) > MAX_VIDEOS_PER_CHANNEL_PER_CHECK:
-            print(f"   ⚠️  ограничиваю до {MAX_VIDEOS_PER_CHANNEL_PER_CHECK}")
+            print(f"   [WARN]  ограничиваю до {MAX_VIDEOS_PER_CHANNEL_PER_CHECK}")
             videos = videos[:MAX_VIDEOS_PER_CHANNEL_PER_CHECK]
 
         for v in videos:
@@ -80,14 +80,14 @@ async def check_all_channels(shutdown_event=None):
                 priority=5, source="auto",
             )
             if tid:
-                print(f"   🆕 #{tid}: {v['title'][:60]}")
+                print(f"   [NEW] #{tid}: {v['title'][:60]}")
                 added += 1
             else:
-                print(f"   ⏭  в очереди: {v['title'][:60]}")
+                print(f"   [SKIP]  в очереди: {v['title'][:60]}")
 
     q = _quota_info()
-    print(f"\n📊 Автоцикл: +{added}")
-    print(f"📊 Квота YouTube: {q['count']}/{YOUTUBE_DAILY_QUOTA} ({q['by_op']})")
+    print(f"\n[STAT] Автоцикл: +{added}")
+    print(f"[STAT] Квота YouTube: {q['count']}/{YOUTUBE_DAILY_QUOTA} ({q['by_op']})")
     print(f"{'=' * 60}")
 
 
@@ -96,18 +96,18 @@ async def _heartbeat_job(bot):
         s = _queue_stats()
         q = _quota_info()
         text = (f"💚 <b>Heartbeat</b>\n\n"
-                f"⏳ {s.get('pending', 0)} | 🔄 {s.get('processing', 0)} | "
-                f"✅ {s.get('done', 0)} | ❌ {s.get('error', 0)}\n"
-                f"📊 Квота: {q['count']}/{YOUTUBE_DAILY_QUOTA}")
+                f"[WAIT] {s.get('pending', 0)} | [RETRY] {s.get('processing', 0)} | "
+                f"[OK] {s.get('done', 0)} | [ERR] {s.get('error', 0)}\n"
+                f"[STAT] Квота: {q['count']}/{YOUTUBE_DAILY_QUOTA}")
         if PSUTIL_AVAILABLE:
             try:
                 mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-                text += f"\n💾 RAM: {mem_mb:.0f} MB"
+                text += f"\n[SAVE] RAM: {mem_mb:.0f} MB"
             except Exception:
                 pass
         await bot.send_message(chat_id=OWNER_USER_ID, text=text)
     except Exception as e:
-        print(f"⚠️  heartbeat: {e}")
+        print(f"[WARN]  heartbeat: {e}")
 
 
 def build_scheduler(bot, shutdown_event):

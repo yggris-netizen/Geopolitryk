@@ -50,7 +50,7 @@ def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effor
                 reasoning = getattr(msg, "reasoning_content", None) or ""
 
                 if not content:
-                    print(f"      ⚠️  {model}: content пуст "
+                    print(f"      [WARN]  {model}: content пуст "
                           f"(finish={finish}, reasoning={len(reasoning)} симв)")
                     if is_last:
                         return ""
@@ -61,14 +61,14 @@ def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effor
                 err = str(e).lower()
                 last_error = e
                 if ("tokens per day" in err or "tpd" in err) and not is_last:
-                    print(f"      🔄 TPD -> fallback")
+                    print(f"      [RETRY] TPD -> fallback")
                     break
                 if ("429" in err or "rate_limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
                     wait = 30
                     m = re.search(r'try again in ([\d.]+)s', str(e))
                     if m:
                         wait = max(float(m.group(1)) + 2, 5)
-                    print(f"      ⏸  429, {wait:.0f}с")
+                    print(f"      [PAUSE]  429, {wait:.0f}с")
                     time.sleep(wait)
                     continue
                 raise
@@ -133,11 +133,11 @@ JSON:"""
             reasoning_effort="low",
         )
         if not raw:
-            print(f"      ⚠️  chunk: пустой ответ")
+            print(f"      [WARN]  chunk: пустой ответ")
             return []
         data = _extract_json(raw)
         if data is None:
-            print(f"      ⚠️  chunk: не JSON, raw={raw[:150]!r}")
+            print(f"      [WARN]  chunk: не JSON, raw={raw[:150]!r}")
             return []
         if isinstance(data, list):
             for item in data:
@@ -145,7 +145,7 @@ JSON:"""
                     item["start"] = float(item.get("start", 0)) + chunk_offset_sec
             return [item for item in data if isinstance(item, dict) and item.get("claim")]
     except Exception as e:
-        print(f"      ⚠️  chunk: {type(e).__name__}: {e!r}")
+        print(f"      [WARN]  chunk: {type(e).__name__}: {e!r}")
     return []
 
 
@@ -189,7 +189,7 @@ def neutralize_title(title: str) -> str:
     try:
         return _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=100, temperature=0.3, reasoning_effort="low",
+            max_tokens=2000, temperature=0.3, reasoning_effort="low",
             task="low",
         )
 

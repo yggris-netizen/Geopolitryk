@@ -61,7 +61,7 @@ def _format_tc(seconds: int) -> str:
 def main():
     items = get_pending(limit=50)
     if not items:
-        print("📭 Pending пуст")
+        print("[EMPTY] Pending пуст")
         return
 
     by_video = {}
@@ -69,15 +69,15 @@ def main():
         vid = p.get("video_id", "")
         by_video.setdefault(vid, []).append(p)
 
-    print(f"📋 Pending: {len(items)} из {len(by_video)} видео\n")
+    print(f"[LIST] Pending: {len(items)} из {len(by_video)} видео\n")
 
     for vid, plist in by_video.items():
         title = _get_video_title(vid)
         title_str = title[:80] if title else "(заголовок не найден)"
         url = plist[0].get("video_url", "") if plist else ""
         print(f"{'=' * 70}")
-        print(f"📺 {vid} — {title_str}")
-        print(f"🔗 {url}")
+        print(f"[TV] {vid} — {title_str}")
+        print(f"[LINK] {url}")
         print(f"{'=' * 70}")
         for p in plist:
             pid = p["id"]
@@ -86,7 +86,7 @@ def main():
             start_sec = _get_first_start(vid, spk)
             tc = _format_tc(start_sec)
             frag_url = f"https://youtu.be/{vid}?t={start_sec}" if vid else url
-            print(f"  id={pid}, {spk}, {dur:.0f}с, ⏱ {tc}")
+            print(f"  id={pid}, {spk}, {dur:.0f}с, [TIME] {tc}")
             print(f"    🎧 {frag_url}")
             print(f"    → python label_one.py {pid} \"<ФИО>\"")
             print(f"    → python label_one.py {pid} \"-\"   (удалить)")

@@ -31,7 +31,7 @@ def save_transcript_raw(video_id, interview_id, expert_name, source_url,
         conn.commit()
         return True
     except Exception as e:
-        print(f"⚠️  save_transcript_raw: {e}")
+        print(f"[WARN]  save_transcript_raw: {e}")
         return False
     finally:
         conn.close()

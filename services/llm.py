@@ -42,7 +42,7 @@ def groq_chat_create(**kwargs):
         now = _time.time()
         wait = _CIRCUIT_PAUSE_SEC - (now - _last_failure_ts)
         if wait > 0:
-            print(f"🔌 Circuit breaker: пауза {wait:.0f}с (Groq падал {_consecutive_failures} раз)")
+            print(f"[CB] Circuit breaker: pause {wait:.0f}с (Groq failed {_consecutive_failures} times)")
             _time.sleep(wait)
         _consecutive_failures = 0
     try:
@@ -58,6 +58,6 @@ def groq_chat_create(**kwargs):
 if PROXY_URL:
     import httpx
     groq_client._client = httpx.Client(proxy=PROXY_URL, timeout=120.0)
-    print(f'🌐 Groq через прокси: {PROXY_URL}')
+    print(f'[NET] Groq via proxy: {PROXY_URL}')
 else:
-    print('🌐 Groq напрямую (без прокси)')
+    print('[NET] Groq direct (no proxy)')

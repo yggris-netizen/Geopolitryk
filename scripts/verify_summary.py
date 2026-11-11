@@ -44,16 +44,16 @@ def _load_nli():
         return _nli_model
     try:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        print("📥 Загружаю NLI-модель (rubert-base-cased-nli-threeway)...")
+        print("[DL] Загружаю NLI-модель (rubert-base-cased-nli-threeway)...")
         model_name = "cointegrated/rubert-base-cased-nli-threeway"
         _nli_tokenizer = AutoTokenizer.from_pretrained(model_name)
         _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name)
         _nli_model.eval()
         NLI_AVAILABLE = True
-        print("✅ NLI-модель OK")
+        print("[OK] NLI-модель OK")
         return _nli_model
     except Exception as e:
-        print(f"❌ NLI не загрузилась: {e}")
+        print(f"[ERR] NLI не загрузилась: {e}")
         NLI_AVAILABLE = False
         return None
 
@@ -73,7 +73,7 @@ def _nli_probs(claim: str, premise: str) -> dict:
         probs = torch.softmax(logits, dim=1)[0].tolist()
         return {_NLI_LABELS[i]: float(probs[i]) for i in range(len(_NLI_LABELS))}
     except Exception as e:
-        print(f"      ⚠️  NLI: {e}")
+        print(f"      [WARN]  NLI: {e}")
         return {"entailment": 0.0, "contradiction": 0.0, "neutral": 1.0}
 
 
@@ -135,7 +135,7 @@ def _find_quote_in_segments(quote: str, segments: list):
             if len(text_norm) < FUZZY_MIN_SEG_LEN:
                 continue
             if _fuzz.partial_ratio(q_prefix, text_norm) > FUZZY_THRESHOLD:
-                print(f"      🔍 fuzzy: seg_idx={i}, len={len(text_norm)}, "
+                print(f"      [SEARCH] fuzzy: seg_idx={i}, len={len(text_norm)}, "
                       f"score={_fuzz.partial_ratio(q_prefix, text_norm):.0f}")
                 return seg, i
 
@@ -170,7 +170,7 @@ def verify_summary(claims_json: str, segments: list):
         seg, seg_idx = _find_quote_in_segments(quote, segments) if quote else (None, -1)
         if not seg:
             stats["not_found"] += 1
-            print(f"   ❌ not_found: {claim[:60]}")
+            print(f"   [ERR] not_found: {claim[:60]}")
             continue
 
         premise = _build_premise(seg_idx, segments)
@@ -186,13 +186,13 @@ def verify_summary(claims_json: str, segments: list):
                 "p_entailment": round(probs.get("entailment", 0), 3),
             })
             stats["verified"] += 1
-            print(f"   ✅ entailment ({probs.get('entailment', 0):.2f}): {claim[:60]}")
+            print(f"   [OK] entailment ({probs.get('entailment', 0):.2f}): {claim[:60]}")
         elif verdict == "contradiction":
             stats["contradiction"] += 1
-            print(f"   ❌ contradiction ({probs.get('contradiction', 0):.2f}): {claim[:60]}")
+            print(f"   [ERR] contradiction ({probs.get('contradiction', 0):.2f}): {claim[:60]}")
         else:
             stats["neutral"] += 1
-            print(f"   ⚠️  neutral (ent={probs.get('entailment', 0):.2f}): {claim[:60]}")
+            print(f"   [WARN]  neutral (ent={probs.get('entailment', 0):.2f}): {claim[:60]}")
             if debug_neutral_shown < 3:
                 print(f"      claim:   {claim[:150]}")
                 print(f"      premise: {premise[:200]}")
@@ -216,23 +216,23 @@ def main():
     vid = sys.argv[1]
     segments = get_transcript_raw_segments(vid)
     if not segments:
-        print(f"❌ Сегменты для {vid} не найдены")
+        print(f"[ERR] Сегменты для {vid} не найдены")
         sys.exit(1)
 
     transcript = " ".join(s.get("text", "") for s in segments)
-    print(f"📝 Транскрипт: {len(transcript)} символов, сегментов: {len(segments)}")
+    print(f"[TXT] Транскрипт: {len(transcript)} символов, сегментов: {len(segments)}")
 
-    print("🧠 Суммаризация с цитатами...")
+    print("[LLM] Суммаризация с цитатами...")
     claims_json = summarize_text(transcript, segments)
     try:
-        print(f"📊 Тезисов: {len(json.loads(claims_json))}")
+        print(f"[STAT] Тезисов: {len(json.loads(claims_json))}")
     except Exception:
-        print("📊 Тезисов: 0")
+        print("[STAT] Тезисов: 0")
 
-    print("🔍 NLI-проверка (premise = 3-5 сегментов)...")
+    print("[SEARCH] NLI-проверка (premise = 3-5 сегментов)...")
     verified, stats = verify_summary(claims_json, segments)
-    print(f"\n📊 Статистика: {stats}")
-    print(f"\n✅ Подтверждено ({len(verified)}):")
+    print(f"\n[STAT] Статистика: {stats}")
+    print(f"\n[OK] Подтверждено ({len(verified)}):")
     for v in verified:
         print(f"  [{v['start']:.0f}с] {v['claim']}")
         print(f"    «{v['quote'][:80]}»")

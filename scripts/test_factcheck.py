@@ -37,14 +37,14 @@ def _clean_query(text: str) -> str:
 def _tavily_search(query: str, max_results: int = 5) -> list:
     """Поиск через Tavily (basic — бесплатный тир, retry 1 раз)."""
     if not TAVILY_API_KEY:
-        print("❌ TAVILY_API_KEY не задан в .env")
+        print("[ERR] TAVILY_API_KEY не задан в .env")
         print("   Зарегистрируйтесь на https://tavily.com (free 1000/мес),")
         print("   скопируйте ключ и добавьте в .env: TAVILY_API_KEY=tvly-...")
         return []
     try:
         from tavily import TavilyClient
     except ImportError:
-        print("❌ tavily-python не установлен. Выполните: pip install tavily-python")
+        print("[ERR] tavily-python не установлен. Выполните: pip install tavily-python")
         return []
 
     for attempt in (1, 2):
@@ -58,9 +58,9 @@ def _tavily_search(query: str, max_results: int = 5) -> list:
             return res.get("results", []) or []
         except Exception as e:
             if attempt == 2:
-                print(f"⚠️  Tavily {type(e).__name__}: {e!r}")
+                print(f"[WARN]  Tavily {type(e).__name__}: {e!r}")
                 return []
-            print(f"   ⏸  Tavily retry ({type(e).__name__}: {e!r})...")
+            print(f"   [PAUSE]  Tavily retry ({type(e).__name__}: {e!r})...")
             time.sleep(2)
     return []
 
@@ -134,7 +134,7 @@ def _call_llm(prompt: str) -> dict:
             raw = (r.choices[0].message.content or "").strip()
             data = _extract_json(raw)
             if data is None:
-                print(f"⚠️  LLM ({model}): не JSON, raw={raw[:200]!r}")
+                print(f"[WARN]  LLM ({model}): не JSON, raw={raw[:200]!r}")
                 continue
             return {
                 "verdict": data.get("verdict", "unverifiable"),
@@ -142,7 +142,7 @@ def _call_llm(prompt: str) -> dict:
                 "reasoning": (data.get("reasoning") or "")[:200],
             }
         except Exception as e:
-            print(f"⚠️  LLM ({model}): {type(e).__name__}: {e!r}")
+            print(f"[WARN]  LLM ({model}): {type(e).__name__}: {e!r}")
             continue
     return {"verdict": "unverifiable", "source_url": "", "reasoning": "LLM не ответил"}
 
@@ -161,10 +161,10 @@ def factcheck_one(pred: dict) -> dict:
 
     clean_text = _clean_query(text)
     query = _clean_query(f"{expert} {clean_text}")[:400]
-    print(f"\n🔍 #{pid} — {clean_text[:100]}")
-    print(f"   🔎 Tavily: {query[:120]}")
+    print(f"\n[SEARCH] #{pid} — {clean_text[:100]}")
+    print(f"   [SEARCH] Tavily: {query[:120]}")
     results = _tavily_search(query)
-    print(f"   📄 результатов: {len(results)}")
+    print(f"   [FILE] результатов: {len(results)}")
     if not results:
         return {"id": pid, "verdict": "unverifiable",
                 "source_url": "", "reasoning": "Tavily: 0 результатов"}
@@ -183,35 +183,35 @@ def main():
             try:
                 pred_id = int(args[1])
             except ValueError:
-                print(f"❌ --id должен быть числом: {args[1]}")
+                print(f"[ERR] --id должен быть числом: {args[1]}")
                 sys.exit(1)
         else:
             try:
                 n = int(args[0])
             except ValueError:
-                print("❌ Аргумент должен быть числом или --id <N>")
+                print("[ERR] Аргумент должен быть числом или --id <N>")
                 sys.exit(1)
 
     if pred_id is not None:
         p = get_prediction(pred_id)
         if not p:
-            print(f"❌ Прогноз #{pred_id} не найден")
+            print(f"[ERR] Прогноз #{pred_id} не найден")
             sys.exit(1)
         preds = [p]
     else:
         preds = _recent_predictions(limit=n)
 
     if not preds:
-        print("📭 Нет прогнозов в БД")
+        print("[EMPTY] Нет прогнозов в БД")
         return
 
     results = []
     for p in preds:
         r = factcheck_one(p)
         results.append(r)
-        print(f"   ✅ {r['verdict']}: {r['reasoning']}")
+        print(f"   [OK] {r['verdict']}: {r['reasoning']}")
         if r.get("source_url"):
-            print(f"   🔗 {r['source_url']}")
+            print(f"   [LINK] {r['source_url']}")
 
     print(f"\n{'=' * 60}")
     print(f"Проверено: {len(results)}")

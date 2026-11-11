@@ -5,12 +5,12 @@ import re
 import time
 from datetime import datetime, timezone
 
-from config import (
+from config import (GROQ_TASK_MODELS, 
     EXTRACT_PREDICTIONS, GROQ_FALLBACK_MODEL,
     GROQ_MAX_RETRIES, GROQ_MODEL,
     MAX_PREDICTION_HORIZON_YEARS, MAX_PREDICTIONS_PER_VIDEO,
 )
-from services.llm import groq_client
+from services.llm import groq_client, groq_chat_create
 
 
 _SAFE_INPUT_CHARS = 6000
@@ -19,20 +19,25 @@ _MAX_OUTPUT_TOKENS = 2000
 
 
 def _build_prompt(transcript, expert_name, today_str, current_year, max_year):
-    return f"""Найди ПРОВЕРЯЕМЫЕ ПРОГНОЗЫ в интервью «{expert_name}».
+    return f"""Найди ПРОГНОЗЫ и МНЕНИЯ О БУДУЩЕМ в интервью «{expert_name}».
 
 СЕГОДНЯ: {today_str}. Текущий год: {current_year}.
 
-ПРОГНОЗ — конкретное утверждение о БУДУЩЕМ с проверяемым исходом:
-- Есть событие (что произойдёт)
-- Есть срок/дата (когда)
-- Можно проверить (да/нет)
+ПРОГНОЗ — ЛЮБОЕ утверждение спикера о БУДУЩЕМ (мнение, вероятность, сценарий):
+- Событие (что может произойти) — даже без точной даты
+- Мнение: «я думаю», «по моему мнению», «вероятно», «может быть»
+- Сценарий: «если X, то Y», «в случае Z — W»
+- Срок: дата, «в ближайшее время», «до конца года», «скоро» — любой
 
-НЕ ПРОГНОЗ:
-- Общие рассуждения («ситуация ухудшится»)
-- Оценки прошлого
-- Без конкретики («произойдёт событие, о котором говорится»)
-- Без срока
+ВКЛЮЧАЙ:
+- «Может быть, Трамп подпишет указ» (без даты)
+- «Если Европа не договорится, будет война» (сценарий)
+- «Я думаю, переговоры пройдут в ноябре» (мнение + дата)
+- «Вероятно, ситуация изменится» (вероятность)
+
+НЕ ПРОГНОЗ (только прошлое):
+- «Он сказал вчера» (прошлое)
+- «Это было в 2024» (прошлое)
 
 ПЛОХО (НЕ включай):
 - «До 27 октября 2026 года произойдёт событие, о котором говорится в интервью»
@@ -63,7 +68,7 @@ JSON:"""
 
 def _call_groq(prompt):
     """Groq с каскадом моделей: TPD → fallback, TPM → retry."""
-    models = [GROQ_MODEL]
+    models = GROQ_TASK_MODELS["high"]
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
 
@@ -72,7 +77,7 @@ def _call_groq(prompt):
         is_last = (mi == len(models) - 1)
         for attempt in range(GROQ_MAX_RETRIES):
             try:
-                return groq_client.chat.completions.create(
+                return groq_chat_create(
                     messages=[{"role": "user", "content": prompt}],
                     model=model, temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS,
                 )
@@ -84,7 +89,7 @@ def _call_groq(prompt):
                     short = model.split("/")[-1]
                     if not is_last:
                         next_short = models[mi + 1].split("/")[-1]
-                        print(f"      🔄 TPD [predictions] {short} → {next_short}")
+                        print(f"      [RETRY] TPD [predictions] {short} → {next_short}")
                         break
                     raise RuntimeError(f"TPD exhausted on all models (predictions): {e}")
 
@@ -93,7 +98,7 @@ def _call_groq(prompt):
                     m = re.search(r'try again in ([\d.]+)s', str(e))
                     if m:
                         wait = max(float(m.group(1)) + 2, 5)
-                    print(f"      ⏸  429 [TPM predictions], {wait:.0f}с (попытка {attempt+1}/{GROQ_MAX_RETRIES})")
+                    print(f"      [PAUSE]  429 [TPM predictions], {wait:.0f}с (попытка {attempt+1}/{GROQ_MAX_RETRIES})")
                     time.sleep(wait)
                     continue
 
@@ -121,15 +126,17 @@ def _parse_response(raw, current_year, max_year):
         if not isinstance(p, str):
             continue
         p = p.strip().strip('"').strip("'").strip("•").strip("-").strip()
-        if not (15 <= len(p) <= 400):
+        if not (10 <= len(p) <= 500):
             continue
         if "о котором говорится в интервью" in p.lower():
             continue
         years_in_pred = re.findall(r'\b(20\d{2})\b', p)
-        if any(int(y) < current_year for y in years_in_pred):
-            continue
-        if any(int(y) > max_year for y in years_in_pred):
-            continue
+        # Ослаблено: если год есть — проверяем, если нет — НЕ отсеиваем
+        if years_in_pred:
+            if any(int(y) < current_year for y in years_in_pred):
+                continue
+            if any(int(y) > max_year for y in years_in_pred):
+                continue
         cleaned.append(p)
     return cleaned[:MAX_PREDICTIONS_PER_VIDEO]
 
@@ -150,21 +157,21 @@ def extract_predictions(transcript, expert_name):
     except Exception as e:
         err = str(e).lower()
         if "413" in err or "request_too_large" in err:
-            print(f"   ⚠️  413 в extract_predictions ({len(safe_text)} симв.) — уменьшаю до {_FALLBACK_INPUT_CHARS}")
+            print(f"   [WARN]  413 в extract_predictions ({len(safe_text)} симв.) — уменьшаю до {_FALLBACK_INPUT_CHARS}")
             safe_text = transcript[:_FALLBACK_INPUT_CHARS]
             prompt = _build_prompt(safe_text, expert_name, today_str, current_year, max_year)
             try:
                 r = _call_groq(prompt)
             except Exception as e2:
-                print(f"⚠️  прогнозы (retry): {e2}")
+                print(f"[WARN]  прогнозы (retry): {e2}")
                 return []
         else:
-            print(f"⚠️  прогнозы: {e}")
+            print(f"[WARN]  прогнозы: {e}")
             return []
 
     try:
         raw = r.choices[0].message.content.strip()
         return _parse_response(raw, current_year, max_year)
     except Exception as e:
-        print(f"⚠️  прогнозы (parse): {e}")
+        print(f"[WARN]  прогнозы (parse): {e}")
         return []

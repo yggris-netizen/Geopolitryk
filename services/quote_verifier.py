@@ -118,18 +118,18 @@ def verify_quotes(quotes_json: str, segments: list):
         reason = _is_garbage(quote)
         if reason:
             stats["garbage"] += 1
-            print(f"   🗑  garbage ({reason}): {quote[:50]}")
+            print(f"   [DEL]  garbage ({reason}): {quote[:50]}")
             continue
 
         if _is_dup(quote, verified):
             stats["duplicates"] += 1
-            print(f"   🔄 duplicate: {quote[:50]}")
+            print(f"   [RETRY] duplicate: {quote[:50]}")
             continue
 
         seg, seg_idx = _find_quote_in_segments(quote, segments)
         if not seg:
             stats["not_found"] += 1
-            print(f"   ❌ not_found: {quote[:60]}")
+            print(f"   [ERR] not_found: {quote[:60]}")
             continue
 
         verified.append({
@@ -143,5 +143,5 @@ def verify_quotes(quotes_json: str, segments: list):
     if len(verified) > MAX_QUOTES:
         verified = verified[:MAX_QUOTES]
 
-    print(f"   ✅ verified: {len(verified)}")
+    print(f"   [OK] verified: {len(verified)}")
     return verified, stats

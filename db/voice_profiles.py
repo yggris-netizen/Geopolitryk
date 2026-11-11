@@ -51,7 +51,7 @@ def save_voice_profile(name: str, bio: str, role: str, embedding: np.ndarray,
         conn.commit()
         return cur.lastrowid
     except Exception as e:
-        print(f"⚠️  save_voice_profile: {e}")
+        print(f"[WARN]  save_voice_profile: {e}")
         return 0
     finally:
         conn.close()

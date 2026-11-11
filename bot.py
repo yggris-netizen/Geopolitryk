@@ -55,29 +55,29 @@ print("=" * 60)
 
 _errors = []
 if not BOT_TOKEN:
-    _errors.append("❌ BOT_TOKEN не задан")
+    _errors.append("[ERR] BOT_TOKEN не задан")
 if not GROQ_API_KEY:
-    _errors.append("❌ GROQ_API_KEY не задан")
+    _errors.append("[ERR] GROQ_API_KEY не задан")
 if not isinstance(CHANNEL_ID, int) or CHANNEL_ID >= 0:
-    _errors.append("❌ CHANNEL_ID должен быть отрицательным")
+    _errors.append("[ERR] CHANNEL_ID должен быть отрицательным")
 if not isinstance(OWNER_USER_ID, int) or OWNER_USER_ID <= 0:
-    _errors.append("❌ OWNER_USER_ID должен быть положительным")
+    _errors.append("[ERR] OWNER_USER_ID должен быть положительным")
 if not os.path.exists(SERVICE_ACCOUNT_FILE):
-    _errors.append(f"❌ {SERVICE_ACCOUNT_FILE} не найден")
+    _errors.append(f"[ERR] {SERVICE_ACCOUNT_FILE} не найден")
 if WHISPER_MODE not in ("groq", "local"):
-    _errors.append(f"❌ WHISPER_MODE: '{WHISPER_MODE}'")
+    _errors.append(f"[ERR] WHISPER_MODE: '{WHISPER_MODE}'")
 
 for _ch in CHANNELS_TO_WATCH:
     if _ch["id"] != _ch["id"].strip():
-        _errors.append(f"❌ ID «{_ch['name']}» содержит пробелы")
+        _errors.append(f"[ERR] ID «{_ch['name']}» содержит пробелы")
 
 if _errors:
-    print("\n⚠️  ОШИБКИ:\n")
+    print("\n[WARN]  ОШИБКИ:\n")
     for _e in _errors:
         print(f"  {_e}")
     sys.exit(1)
 
-print("✅ Настройки в порядке")
+print("[OK] Настройки в порядке")
 print(f"   Канал:            {CHANNEL_ID}")
 print(f"   Owner:            {OWNER_USER_ID}")
 print(f"   Модель LLM:       {GROQ_MODEL}")
@@ -113,32 +113,32 @@ async def _main():
     global _SHUTDOWN_EVENT
     _SHUTDOWN_EVENT = asyncio.Event()
 
-    print("🔍 [1/10] _main() стартовал")
-    print(f"🔍 sys.argv = {sys.argv}")
-    print(f"🔍 CWD = {os.getcwd()}")
+    print("[SEARCH] [1/10] _main() стартовал")
+    print(f"[SEARCH] sys.argv = {sys.argv}")
+    print(f"[SEARCH] CWD = {os.getcwd()}")
 
     def _handle_shutdown_signal():
-        print("\n⏹ Получен сигнал завершения")
+        print("\n[STOP] Получен сигнал завершения")
         _SHUTDOWN_EVENT.set()
 
     try:
         loop = asyncio.get_running_loop()
-        print(f"🔍 [2/10] Running loop: {type(loop).__name__}")
+        print(f"[SEARCH] [2/10] Running loop: {type(loop).__name__}")
     except Exception as e:
-        print(f"⚠️  get_running_loop: {e}")
+        print(f"[WARN]  get_running_loop: {e}")
 
     try:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, _handle_shutdown_signal)
-                print(f"🔍 signal {sig.name} зарегистрирован")
+                print(f"[SEARCH] signal {sig.name} зарегистрирован")
             except (NotImplementedError, RuntimeError, ValueError) as _e:
-                print(f"🔍 signal {sig.name} не зарегистрирован ({type(_e).__name__})")
+                print(f"[SEARCH] signal {sig.name} не зарегистрирован ({type(_e).__name__})")
     except Exception as e:
-        print(f"⚠️  signal setup: {e}")
+        print(f"[WARN]  signal setup: {e}")
 
-    print("🔍 [3/10] CLI checks")
+    print("[SEARCH] [3/10] CLI checks")
     if "--predictions" in sys.argv:
         _init_db()
         conn = sqlite3.connect(DB_PATH)
@@ -151,7 +151,7 @@ async def _main():
             print("Нет прогнозов")
             return
         for r in rows:
-            m = {"confirmed": "✅", "refuted": "❌", "unverifiable": "❔"}.get(r["verdict"], "⏳")
+            m = {"confirmed": "[OK]", "refuted": "[ERR]", "unverifiable": "[?]"}.get(r["verdict"], "[WAIT]")
             print(f"{m} [{r['id']}] {r['expert_name']}: {r['prediction_text'][:100]}")
         return
 
@@ -165,7 +165,7 @@ async def _main():
             print("python bot.py --mark <id> confirmed|refuted|unverifiable")
             return
         if v not in ("confirmed", "refuted", "unverifiable"):
-            print("❌ Неверный вердикт")
+            print("[ERR] Неверный вердикт")
             return
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -174,13 +174,13 @@ async def _main():
         )
         conn.commit()
         conn.close()
-        print(f"✅ [{pid}] → {v}")
+        print(f"[OK] [{pid}] → {v}")
         return
 
     if "--queue" in sys.argv:
         _init_db()
         for t in _queue_list():
-            ic = "🔄" if t['status'] == 'processing' else "⏳"
+            ic = "[RETRY]" if t['status'] == 'processing' else "[WAIT]"
             src = "👤" if t['source'] == 'telegram' else "🤖"
             print(f"{ic}{src} #{t['id']} [P{t['priority']}] "
                   f"(попыток: {t['attempts']}) "
@@ -191,10 +191,10 @@ async def _main():
         _init_db()
         errs = _recent_errors(20)
         if not errs:
-            print("✅ Ошибок нет")
+            print("[OK] Ошибок нет")
             return
         for e in errs:
-            print(f"❌ #{e['id']} (попыток: {e['attempts']}): "
+            print(f"[ERR] #{e['id']} (попыток: {e['attempts']}): "
                   f"{(e['video_title'] or e['video_url'])[:50]}")
             print(f"   {e['error_message'] or '—'}")
         return
@@ -208,7 +208,7 @@ async def _main():
             print("python bot.py --cancel <id>")
             return
         ok, msg = _cancel_task(tid)
-        print(("✅" if ok else "❌") + f" {msg}")
+        print(("[OK]" if ok else "[ERR]") + f" {msg}")
         return
 
     if "--reset" in sys.argv:
@@ -246,33 +246,33 @@ async def _main():
             skip_duration_check=True,
         )
         print(f"\n{'=' * 60}")
-        print(f"Результат: {'✅ OK' if ok else '❌ ' + reason}")
+        print(f"Результат: {'[OK] OK' if ok else '[ERR] ' + reason}")
         print(f"{'=' * 60}")
         await bot.session.close()
         return
 
-    print("🔍 [4/10] перед _init_db")
+    print("[SEARCH] [4/10] перед _init_db")
     _cleanup_temp_files()
     _init_db()
-    print("🔍 [5/10] после _init_db")
+    print("[SEARCH] [5/10] после _init_db")
 
     if TEST_VIDEO_URL:
         print("\n🧪 ТЕСТ")
         ok, reason = await process_and_publish(TEST_VIDEO_URL, video_title=TEST_VIDEO_TITLE)
-        print(f"Тест: {'✅ OK' if ok else '❌ ' + reason}")
+        print(f"Тест: {'[OK] OK' if ok else '[ERR] ' + reason}")
 
-    print("🔍 [6/10] перед check_all_channels")
+    print("[SEARCH] [6/10] перед check_all_channels")
     await check_all_channels(_SHUTDOWN_EVENT)
-    print("🔍 [7/10] после check_all_channels")
+    print("[SEARCH] [7/10] после check_all_channels")
 
-    print("🔍 [8/10] создаю воркер и планировщик")
+    print("[SEARCH] [8/10] создаю воркер и планировщик")
     worker_task = asyncio.create_task(_worker_loop(_SHUTDOWN_EVENT))
     scheduler = build_scheduler(bot, _SHUTDOWN_EVENT)
     scheduler.start()
-    print("🔍 [9/10] scheduler запущен")
+    print("[SEARCH] [9/10] scheduler запущен")
 
     print(f"\n{'=' * 60}")
-    print("🚀 БОТ ГОТОВ")
+    print("[START] БОТ ГОТОВ")
     print(f"   Воркер: запущен")
     print(f"   Планировщик: каждые {CHECK_INTERVAL_HOURS} ч")
     print(f"   Глубина: {HOURS_BACK} ч")
@@ -282,43 +282,43 @@ async def _main():
     print(f"   БД: {DB_PATH}")
     print(f"{'=' * 60}\n")
 
-    print("🔍 [10/10] запускаю dp.start_polling()")
+    print("[SEARCH] [10/10] запускаю dp.start_polling()")
     try:
         await dp.start_polling(bot)
     finally:
-        print("\n⏹ Останавливаюсь...")
+        print("\n[STOP] Останавливаюсь...")
         _SHUTDOWN_EVENT.set()
         try:
             scheduler.shutdown(wait=False)
         except Exception:
             pass
-        print("⏳ Ожидание завершения текущей задачи (до 10 мин)...")
+        print("[WAIT] Ожидание завершения текущей задачи (до 10 мин)...")
         try:
             await asyncio.wait_for(worker_task, timeout=600)
-            print("✅ Воркер завершён")
+            print("[OK] Воркер завершён")
         except (asyncio.TimeoutError, asyncio.CancelledError):
-            print("⏱ Таймаут — отменяю воркер")
+            print("[TIME] Таймаут — отменяю воркер")
             worker_task.cancel()
             try:
                 await worker_task
             except (asyncio.CancelledError, Exception):
                 pass
         except Exception as e:
-            print(f"⚠️  Ошибка при остановке: {e}")
+            print(f"[WARN]  Ошибка при остановке: {e}")
         try:
             await bot.session.close()
         except Exception:
             pass
-        print("⏹ Завершено")
+        print("[STOP] Завершено")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
-        print("\n\n⏹ Остановлено (Ctrl+C)")
+        print("\n\n[STOP] Остановлено (Ctrl+C)")
     except BaseException as e:
-        print(f"\n\n❌ КРИТИЧЕСКАЯ ОШИБКА: {type(e).__name__}: {e}")
+        print(f"\n\n[ERR] КРИТИЧЕСКАЯ ОШИБКА: {type(e).__name__}: {e}")
         traceback.print_exc()
         try:
             sys.stderr.flush()

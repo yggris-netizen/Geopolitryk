@@ -22,7 +22,7 @@ def _save_summary(video_id, expert_name, channel_name, summary_text,
         conn.commit()
         return True
     except Exception as e:
-        print(f"⚠️  _save_summary: {e}")
+        print(f"[WARN]  _save_summary: {e}")
         return False
     finally:
         conn.close()

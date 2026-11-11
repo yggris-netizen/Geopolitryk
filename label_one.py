@@ -23,13 +23,13 @@ def main():
     try:
         pid = int(sys.argv[1])
     except ValueError:
-        print(f"❌ pending_id должен быть числом: {sys.argv[1]}")
+        print(f"[ERR] pending_id должен быть числом: {sys.argv[1]}")
         sys.exit(1)
 
     name = sys.argv[2].strip()
     pending = get_pending_by_id(pid)
     if not pending:
-        print(f"❌ pending #{pid} не найден (уже размечен?)")
+        print(f"[ERR] pending #{pid} не найден (уже размечен?)")
         sys.exit(1)
 
     spk = pending.get("speaker_id") or "?"
@@ -38,11 +38,11 @@ def main():
 
     if name == "-":
         mark_resolved(pid, "ignored")
-        print(f"⏭ pending #{pid} ({spk}, {dur:.0f}с, {vid}) — удалён (ignored)")
+        print(f"[SKIP] pending #{pid} ({spk}, {dur:.0f}с, {vid}) — удалён (ignored)")
         return
 
     if not name or len(name) < 3 or len(name) > 60:
-        print(f"❌ ФИО: 3–60 символов. Получено: {name!r}")
+        print(f"[ERR] ФИО: 3–60 символов. Получено: {name!r}")
         sys.exit(1)
 
     save_voice_profile(
@@ -52,8 +52,8 @@ def main():
         source_video_id=vid,
     )
     mark_resolved(pid, "resolved")
-    print(f"✅ pending #{pid} ({spk}, {dur:.0f}с, {vid}) → {name}")
-    print(f"📊 В voice_profiles: {len(get_all_profiles())}")
+    print(f"[OK] pending #{pid} ({spk}, {dur:.0f}с, {vid}) → {name}")
+    print(f"[STAT] В voice_profiles: {len(get_all_profiles())}")
 
 
 if __name__ == "__main__":

@@ -84,7 +84,7 @@ def update_prediction_text(pred_id: int, new_text: str) -> bool:
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
-        print(f"⚠️  update_prediction_text: {e}")
+        print(f"[WARN]  update_prediction_text: {e}")
         return False
     finally:
         conn.close()
@@ -115,7 +115,7 @@ def update_prediction_verdict(pred_id: int, verdict: str, notes: str = "") -> bo
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
-        print(f"⚠️  update_prediction_verdict: {e}")
+        print(f"[WARN]  update_prediction_verdict: {e}")
         return False
     finally:
         conn.close()
@@ -128,7 +128,7 @@ def delete_prediction(pred_id: int) -> bool:
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:
-        print(f"⚠️  delete_prediction: {e}")
+        print(f"[WARN]  delete_prediction: {e}")
         return False
     finally:
         conn.close()

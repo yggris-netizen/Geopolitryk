@@ -23,7 +23,7 @@ IS_LINUX = platform.system() == "Linux"
 # ─── Окружение (pc / laptop / server) ───
 BOT_ENV = os.getenv("BOT_ENV", "pc").lower()
 if BOT_ENV not in ("pc", "laptop", "server"):
-    print(f"⚠️  BOT_ENV={BOT_ENV!r} — неизвестно, использую 'pc'")
+    print(f"[WARN]  BOT_ENV={BOT_ENV!r} — неизвестно, использую 'pc'")
     BOT_ENV = "pc"
 
 IS_SERVER = BOT_ENV == "server"
@@ -62,7 +62,7 @@ GROQ_API_BASE = os.getenv("GROQ_API_BASE", "").strip() or None
 # ─── Логирование ───
 def print_environment():
     """Печатает текущее окружение (для диагностики)."""
-    print(f"🌍 BOT_ENV: {BOT_ENV}")
+    print(f"[ENV] BOT_ENV: {BOT_ENV}")
     print(f"   IS_WINDOWS: {IS_WINDOWS}, IS_LINUX: {IS_LINUX}")
     print(f"   IS_SERVER: {IS_SERVER}, IS_PC: {IS_PC}, IS_LAPTOP: {IS_LAPTOP}")
     print(f"   DB_PATH: {DB_PATH}")

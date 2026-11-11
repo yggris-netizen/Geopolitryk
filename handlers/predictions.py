@@ -39,8 +39,8 @@ class PredStates(StatesGroup):
 
 
 def _verdict_icon(verdict):
-    return {"confirmed": "✅", "refuted": "❌",
-            "unverifiable": "❔"}.get(verdict, "⏳")
+    return {"confirmed": "[OK]", "refuted": "[ERR]",
+            "unverifiable": "[?]"}.get(verdict, "[WAIT]")
 
 
 def _verdict_label(verdict):
@@ -80,11 +80,11 @@ def _prediction_keyboard(pred_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"pred:edit:{pred_id}"),
-            InlineKeyboardButton(text="✅ Вердикт", callback_data=f"pred:verdict:{pred_id}"),
+            InlineKeyboardButton(text="[OK] Вердикт", callback_data=f"pred:verdict:{pred_id}"),
         ],
         [
-            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"pred:delete:{pred_id}"),
-            InlineKeyboardButton(text="📄 Детали", callback_data=f"pred:show:{pred_id}"),
+            InlineKeyboardButton(text="[DEL] Удалить", callback_data=f"pred:delete:{pred_id}"),
+            InlineKeyboardButton(text="[FILE] Детали", callback_data=f"pred:show:{pred_id}"),
         ],
     ])
 
@@ -92,12 +92,12 @@ def _prediction_keyboard(pred_id: int):
 def _verdict_keyboard(pred_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Подтверждён", callback_data=f"pred:setv:{pred_id}:confirmed"),
-            InlineKeyboardButton(text="❌ Опровергнут", callback_data=f"pred:setv:{pred_id}:refuted"),
+            InlineKeyboardButton(text="[OK] Подтверждён", callback_data=f"pred:setv:{pred_id}:confirmed"),
+            InlineKeyboardButton(text="[ERR] Опровергнут", callback_data=f"pred:setv:{pred_id}:refuted"),
         ],
         [
-            InlineKeyboardButton(text="❔ Непроверяемый", callback_data=f"pred:setv:{pred_id}:unverifiable"),
-            InlineKeyboardButton(text="⏳ Сбросить", callback_data=f"pred:setv:{pred_id}:pending"),
+            InlineKeyboardButton(text="[?] Непроверяемый", callback_data=f"pred:setv:{pred_id}:unverifiable"),
+            InlineKeyboardButton(text="[WAIT] Сбросить", callback_data=f"pred:setv:{pred_id}:pending"),
         ],
         [InlineKeyboardButton(text="◀️ Назад", callback_data=f"pred:show:{pred_id}")],
     ])
@@ -111,12 +111,12 @@ def _list_keyboard(page: int, total: int, expert: str | None, verdict: str | Non
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
     nav_row.append(InlineKeyboardButton(text=f"{page+1}/{max(total_pages,1)}", callback_data="pred:noop"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="▶️", callback_data=f"pred:page:{page+1}"))
+        nav_row.append(InlineKeyboardButton(text="[PLAY]", callback_data=f"pred:page:{page+1}"))
     if nav_row:
         buttons.append(nav_row)
     buttons.append([
-        InlineKeyboardButton(text="⏳ Только без вердикта", callback_data="pred:filter:pending"),
-        InlineKeyboardButton(text="🔄 Сбросить фильтр", callback_data="pred:filter:all"),
+        InlineKeyboardButton(text="[WAIT] Только без вердикта", callback_data="pred:filter:pending"),
+        InlineKeyboardButton(text="[RETRY] Сбросить фильтр", callback_data="pred:filter:all"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -125,7 +125,7 @@ async def _render_list(message_or_cb, page=0, expert=None, verdict=None):
     rows, total = list_predictions(limit=PAGE_SIZE, offset=page * PAGE_SIZE,
                                     expert=expert, verdict=verdict)
     if not rows:
-        text = "📭 Прогнозов пока нет"
+        text = "[EMPTY] Прогнозов пока нет"
         if isinstance(message_or_cb, CallbackQuery):
             await message_or_cb.message.edit_text(text)
         else:
@@ -166,11 +166,11 @@ async def cmd_pred(message: Message):
     try:
         pid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
+        await message.answer("[ERR] ID должен быть числом")
         return
     p = get_prediction(pid)
     if not p:
-        await message.answer(f"❌ Прогноз #{pid} не найден")
+        await message.answer(f"[ERR] Прогноз #{pid} не найден")
         return
     await message.answer(_format_prediction_full(p), reply_markup=_prediction_keyboard(pid))
 
@@ -186,14 +186,14 @@ async def cmd_editpred(message: Message):
     try:
         pid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
+        await message.answer("[ERR] ID должен быть числом")
         return
     new_text = parts[2].strip()
     if not update_prediction_text(pid, new_text):
-        await message.answer("❌ Не удалось обновить (текст пустой, >400 символов или ID не найден)")
+        await message.answer("[ERR] Не удалось обновить (текст пустой, >400 символов или ID не найден)")
         return
     p = get_prediction(pid)
-    await message.answer(f"✅ Прогноз #{pid} обновлён:\n\n{html.escape(p['prediction_text'])}",
+    await message.answer(f"[OK] Прогноз #{pid} обновлён:\n\n{html.escape(p['prediction_text'])}",
                          reply_markup=_prediction_keyboard(pid))
 
 
@@ -210,19 +210,19 @@ async def cmd_verdict(message: Message):
     try:
         pid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
+        await message.answer("[ERR] ID должен быть числом")
         return
     v = parts[2].lower()
     if v not in ("confirmed", "refuted", "unverifiable", "pending"):
-        await message.answer("❌ Вердикт: confirmed, refuted, unverifiable или pending")
+        await message.answer("[ERR] Вердикт: confirmed, refuted, unverifiable или pending")
         return
     ok = update_prediction_verdict(pid, "" if v == "pending" else v)
     if not ok:
-        await message.answer(f"❌ Не удалось обновить прогноз #{pid}")
+        await message.answer(f"[ERR] Не удалось обновить прогноз #{pid}")
         return
     p = get_prediction(pid)
     await message.answer(
-        f"✅ #{pid} → {_verdict_label(p.get('verdict'))}",
+        f"[OK] #{pid} → {_verdict_label(p.get('verdict'))}",
         reply_markup=_prediction_keyboard(pid)
     )
 
@@ -238,16 +238,16 @@ async def cmd_delpred(message: Message):
     try:
         pid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
+        await message.answer("[ERR] ID должен быть числом")
         return
     p = get_prediction(pid)
     if not p:
-        await message.answer(f"❌ Прогноз #{pid} не найден")
+        await message.answer(f"[ERR] Прогноз #{pid} не найден")
         return
     if delete_prediction(pid):
-        await message.answer(f"🗑 Прогноз #{pid} удалён")
+        await message.answer(f"[DEL] Прогноз #{pid} удалён")
     else:
-        await message.answer(f"❌ Не удалось удалить #{pid}")
+        await message.answer(f"[ERR] Не удалось удалить #{pid}")
 
 
 # ─── Callback-кнопки ─────────────────────────────────────
@@ -294,7 +294,7 @@ async def cb_show(callback: CallbackQuery):
         return
     p = get_prediction(pid)
     if not p:
-        await callback.answer("❌ Не найден", show_alert=True)
+        await callback.answer("[ERR] Не найден", show_alert=True)
         return
     await callback.message.edit_text(_format_prediction_full(p),
                                       reply_markup=_prediction_keyboard(pid))
@@ -313,7 +313,7 @@ async def cb_edit(callback: CallbackQuery, state: FSMContext):
         return
     p = get_prediction(pid)
     if not p:
-        await callback.answer("❌ Не найден", show_alert=True)
+        await callback.answer("[ERR] Не найден", show_alert=True)
         return
     await state.set_state(PredStates.waiting_new_text)
     await state.update_data(pred_id=pid)
@@ -328,7 +328,7 @@ async def cb_edit(callback: CallbackQuery, state: FSMContext):
 @router.message(PredStates.waiting_new_text, F.text == "/cancel")
 async def cancel_edit(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("⏹ Редактирование отменено")
+    await message.answer("[STOP] Редактирование отменено")
 
 
 @router.message(PredStates.waiting_new_text, F.text)
@@ -340,19 +340,19 @@ async def save_edit(message: Message, state: FSMContext):
         return
     new_text = (message.text or "").strip()
     if not new_text:
-        await message.answer("❌ Пустой текст. Отправьте текст или /cancel.")
+        await message.answer("[ERR] Пустой текст. Отправьте текст или /cancel.")
         return
     if len(new_text) > 400:
-        await message.answer(f"❌ Текст слишком длинный ({len(new_text)} > 400). Сократите или /cancel.")
+        await message.answer(f"[ERR] Текст слишком длинный ({len(new_text)} > 400). Сократите или /cancel.")
         return
     if not update_prediction_text(pid, new_text):
-        await message.answer("❌ Не удалось обновить прогноз")
+        await message.answer("[ERR] Не удалось обновить прогноз")
         await state.clear()
         return
     await state.clear()
     p = get_prediction(pid)
     await message.answer(
-        f"✅ Прогноз #{pid} обновлён:\n\n{html.escape(p['prediction_text'])}",
+        f"[OK] Прогноз #{pid} обновлён:\n\n{html.escape(p['prediction_text'])}",
         reply_markup=_prediction_keyboard(pid)
     )
 
@@ -369,7 +369,7 @@ async def cb_verdict_menu(callback: CallbackQuery):
         return
     p = get_prediction(pid)
     if not p:
-        await callback.answer("❌ Не найден", show_alert=True)
+        await callback.answer("[ERR] Не найден", show_alert=True)
         return
     await callback.message.edit_text(
         _format_prediction_full(p),
@@ -391,14 +391,14 @@ async def cb_set_verdict(callback: CallbackQuery):
         return
     ok = update_prediction_verdict(pid, "" if v == "pending" else v)
     if not ok:
-        await callback.answer("❌ Не удалось", show_alert=True)
+        await callback.answer("[ERR] Не удалось", show_alert=True)
         return
     p = get_prediction(pid)
     await callback.message.edit_text(
         _format_prediction_full(p),
         reply_markup=_prediction_keyboard(pid)
     )
-    await callback.answer(f"✅ {_verdict_label(p.get('verdict'))}")
+    await callback.answer(f"[OK] {_verdict_label(p.get('verdict'))}")
 
 
 @router.callback_query(F.data.startswith("pred:delete:"))
@@ -413,16 +413,16 @@ async def cb_delete_confirm(callback: CallbackQuery):
         return
     p = get_prediction(pid)
     if not p:
-        await callback.answer("❌ Не найден", show_alert=True)
+        await callback.answer("[ERR] Не найден", show_alert=True)
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"pred:delyes:{pid}"),
+            InlineKeyboardButton(text="[DEL] Да, удалить", callback_data=f"pred:delyes:{pid}"),
             InlineKeyboardButton(text="◀️ Отмена", callback_data=f"pred:show:{pid}"),
         ]
     ])
     await callback.message.edit_text(
-        f"🗑 Удалить прогноз #{pid}?\n\n<i>{html.escape(p['prediction_text'][:300])}</i>",
+        f"[DEL] Удалить прогноз #{pid}?\n\n<i>{html.escape(p['prediction_text'][:300])}</i>",
         reply_markup=kb
     )
     await callback.answer()
@@ -439,7 +439,7 @@ async def cb_delete_yes(callback: CallbackQuery):
         await callback.answer()
         return
     if delete_prediction(pid):
-        await callback.message.edit_text(f"🗑 Прогноз #{pid} удалён")
+        await callback.message.edit_text(f"[DEL] Прогноз #{pid} удалён")
         await callback.answer("Удалено")
     else:
-        await callback.answer("❌ Не удалось", show_alert=True)
+        await callback.answer("[ERR] Не удалось", show_alert=True)

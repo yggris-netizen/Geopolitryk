@@ -54,7 +54,7 @@ def detect_experts(video_title, transcript, description="",
                    video_url: str = ""):
     """Возвращает (experts, unknown)."""
     if not clusters:
-        print("   ⚠️  voice_identification: кластеров нет")
+        print("   [WARN]  voice_identification: кластеров нет")
         return [], []
 
     print(f"   → Режим: voice fingerprinting ({len(clusters)} кластеров)")
@@ -69,7 +69,7 @@ def detect_experts(video_title, transcript, description="",
 
         # 1. Слишком короткий для match — шум
         if duration < MIN_MATCH_DURATION_SEC:
-            print(f"   ⏭ {speaker_id} ({duration:.0f}с < {MIN_MATCH_DURATION_SEC:.0f}с) "
+            print(f"   [SKIP] {speaker_id} ({duration:.0f}с < {MIN_MATCH_DURATION_SEC:.0f}с) "
                   f"— шум, пропускаю")
             continue
 
@@ -91,7 +91,7 @@ def detect_experts(video_title, transcript, description="",
                 diff = first_s - second_s
                 if (cos_between > NEGATIVE_COS_THRESHOLD
                         and diff < NEGATIVE_DIFF_THRESHOLD):
-                    print(f"   ⚠️  {speaker_id} — НЕОДНОЗНАЧНО: "
+                    print(f"   [WARN]  {speaker_id} — НЕОДНОЗНАЧНО: "
                           f"{first_p['name']} ({first_s:.2f}) vs "
                           f"{second_p['name']} ({second_s:.2f}), "
                           f"cos={cos_between:.2f}, diff={diff:.3f} → pending")
@@ -111,7 +111,7 @@ def detect_experts(video_title, transcript, description="",
                 "duration_sec": duration,
                 "score": first_s,
             })
-            print(f"   ✅ {speaker_id} → {first_p['name']} "
+            print(f"   [OK] {speaker_id} → {first_p['name']} "
                   f"(score={first_s:.2f}, {duration:.0f}с)")
             continue
 
@@ -120,13 +120,13 @@ def detect_experts(video_title, transcript, description="",
                                     threshold=NEAR_MATCH_THRESHOLD, n=1)
         if near:
             np_, ns_ = near[0]
-            print(f"   ⚠️  {speaker_id} → возможно, {np_['name']} "
+            print(f"   [WARN]  {speaker_id} → возможно, {np_['name']} "
                   f"(score={ns_:.2f}, {duration:.0f}с) — пропускаю")
             continue
 
         # 4. Слишком короткий для unknown — шум
         if duration < MIN_UNKNOWN_DURATION_SEC:
-            print(f"   ⏭ {speaker_id} ({duration:.0f}с < {MIN_UNKNOWN_DURATION_SEC:.0f}с) "
+            print(f"   [SKIP] {speaker_id} ({duration:.0f}с < {MIN_UNKNOWN_DURATION_SEC:.0f}с) "
                   f"— шум, пропускаю")
             continue
 
@@ -144,12 +144,12 @@ def detect_experts(video_title, transcript, description="",
         if name not in by_name:
             by_name[name] = e
         elif e["duration_sec"] > by_name[name]["duration_sec"]:
-            print(f"   🔄 {by_name[name]['speaker']} — дубликат «{name}» "
+            print(f"   [RETRY] {by_name[name]['speaker']} — дубликат «{name}» "
                   f"({by_name[name]['duration_sec']:.0f}с < {e['duration_sec']:.0f}с), "
                   f"заменяю на {e['speaker']}")
             by_name[name] = e
         else:
-            print(f"   🔄 {e['speaker']} — дубликат «{name}» "
+            print(f"   [RETRY] {e['speaker']} — дубликат «{name}» "
                   f"({e['duration_sec']:.0f}с), отбрасываю")
 
     experts = []
@@ -160,7 +160,7 @@ def detect_experts(video_title, transcript, description="",
             "speaker": e["speaker"],
             "duration_sec": e["duration_sec"],
         })
-        print(f"   ✅ {e['speaker']} → {name} (kept, {e['duration_sec']:.0f}с)")
+        print(f"   [OK] {e['speaker']} → {name} (kept, {e['duration_sec']:.0f}с)")
 
     # Дедупликация unknown между собой (cos > 0.85)
     unknown = []
@@ -170,12 +170,12 @@ def detect_experts(video_title, transcript, description="",
             score = cosine_similarity(cand["embedding"], kept["embedding"])
             if score > UNKNOWN_DEDUP_THRESHOLD:
                 if cand["duration_sec"] > kept["duration_sec"]:
-                    print(f"   🔄 {kept['speaker_id']} — дубликат {cand['speaker_id']} "
+                    print(f"   [RETRY] {kept['speaker_id']} — дубликат {cand['speaker_id']} "
                           f"(cos={score:.2f}), заменяю на длинный")
                     unknown.remove(kept)
                     unknown.append(cand)
                 else:
-                    print(f"   🔄 {cand['speaker_id']} — дубликат {kept['speaker_id']} "
+                    print(f"   [RETRY] {cand['speaker_id']} — дубликат {kept['speaker_id']} "
                           f"(cos={score:.2f}), пропускаю")
                 is_dup = True
                 break
@@ -183,7 +183,7 @@ def detect_experts(video_title, transcript, description="",
             unknown.append(cand)
 
     if unknown:
-        print(f"   ❓ Незнакомых (после фильтрации): {len(unknown)}")
+        print(f"   [?] Незнакомых (после фильтрации): {len(unknown)}")
         for u in unknown:
             print(f"      {u['speaker_id']}: {u['duration_sec']:.0f}с")
 

@@ -12,7 +12,7 @@ try:
         SERVICE_ACCOUNT_FILE, scopes=YOUTUBE_SCOPES
     )
     youtube = build("youtube", "v3", credentials=_credentials)
-    print("✅ YouTube API OK")
+    print("[OK] YouTube API OK")
 except Exception as _e:
-    print(f"❌ YouTube API: {_e}")
+    print(f"[ERR] YouTube API: {_e}")
     sys.exit(1)

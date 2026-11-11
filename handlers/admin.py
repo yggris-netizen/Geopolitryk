@@ -49,7 +49,7 @@ def _ram_suffix() -> str:
         return ""
     try:
         mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-        return f"\n💾 RAM: {mem_mb:.0f} MB"
+        return f"\n[SAVE] RAM: {mem_mb:.0f} MB"
     except Exception:
         return ""
 
@@ -58,7 +58,7 @@ def _ram_suffix() -> str:
 async def cmd_help(message: Message):
     if not _is_owner(message):
         return
-    mode = "🔧 ДИАГНОСТИКА" if DIAGNOSTIC_MODE else "📦 ОБЫЧНЫЙ"
+    mode = "[TOOL] ДИАГНОСТИКА" if DIAGNOSTIC_MODE else "📦 ОБЫЧНЫЙ"
     await message.answer(
         f"<b>ГЕОПОЛИТРУК</b>\n"
         f"Режим: {mode}\n"
@@ -83,11 +83,11 @@ async def cmd_queue(message: Message):
         return
     tasks = _queue_list(20)
     if not tasks:
-        await message.answer("📭 Очередь пуста")
+        await message.answer("[EMPTY] Очередь пуста")
         return
-    lines = ["<b>📋 Очередь:</b>\n"]
+    lines = ["<b>[LIST] Очередь:</b>\n"]
     for t in tasks:
-        ic = "🔄" if t['status'] == 'processing' else "⏳"
+        ic = "[RETRY]" if t['status'] == 'processing' else "[WAIT]"
         src = "👤" if t['source'] == 'telegram' else "🤖"
         retry = ""
         if t.get('next_retry_at'):
@@ -104,13 +104,13 @@ async def cmd_stats(message: Message):
         return
     s = _queue_stats()
     q = _quota_info()
-    mode = "🔧" if DIAGNOSTIC_MODE else "📦"
-    text = (f"<b>📊 Статистика</b> ({mode})\n\n"
-            f"⏳ Pending: {s.get('pending', 0)}\n"
-            f"🔄 Processing: {s.get('processing', 0)}\n"
-            f"✅ Done: {s.get('done', 0)}\n"
-            f"❌ Error: {s.get('error', 0)}\n\n"
-            f"📊 Квота YouTube: {q['count']}/{YOUTUBE_DAILY_QUOTA}"
+    mode = "[TOOL]" if DIAGNOSTIC_MODE else "📦"
+    text = (f"<b>[STAT] Статистика</b> ({mode})\n\n"
+            f"[WAIT] Pending: {s.get('pending', 0)}\n"
+            f"[RETRY] Processing: {s.get('processing', 0)}\n"
+            f"[OK] Done: {s.get('done', 0)}\n"
+            f"[ERR] Error: {s.get('error', 0)}\n\n"
+            f"[STAT] Квота YouTube: {q['count']}/{YOUTUBE_DAILY_QUOTA}"
             f"{_ram_suffix()}")
     await message.answer(text)
 
@@ -124,7 +124,7 @@ async def cmd_quota(message: Message):
     remaining = YOUTUBE_DAILY_QUOTA - q["count"]
     pct = round(q["count"] / YOUTUBE_DAILY_QUOTA * 100, 2)
     await message.answer(
-        f"<b>📊 Квота YouTube</b>\n\n"
+        f"<b>[STAT] Квота YouTube</b>\n\n"
         f"Дата (UTC): {q['date']}\n"
         f"Использовано: <b>{q['count']}</b> / {YOUTUBE_DAILY_QUOTA} ({pct}%)\n"
         f"Осталось: {remaining}\n\n"
@@ -138,9 +138,9 @@ async def cmd_errors(message: Message):
         return
     errors = _recent_errors(10)
     if not errors:
-        await message.answer("✅ Ошибок нет")
+        await message.answer("[OK] Ошибок нет")
         return
-    lines = ["<b>❌ Последние ошибки:</b>\n"]
+    lines = ["<b>[ERR] Последние ошибки:</b>\n"]
     for e in errors:
         title = (e['video_title'] or e['video_url'])[:50]
         msg = (e['error_message'] or "—")[:400]
@@ -163,12 +163,12 @@ async def cmd_predictions(message: Message):
     except ImportError:
         preds = _recent_predictions(15)
         if not preds:
-            await message.answer("📭 Прогнозов пока нет")
+            await message.answer("[EMPTY] Прогнозов пока нет")
             return
         lines = ["<b>🔮 Последние прогнозы:</b>\n"]
         for p in preds:
-            icon = {"confirmed": "✅", "refuted": "❌",
-                    "unverifiable": "❔"}.get(p.get("verdict"), "⏳")
+            icon = {"confirmed": "[OK]", "refuted": "[ERR]",
+                    "unverifiable": "[?]"}.get(p.get("verdict"), "[WAIT]")
             lines.append(f"{icon} <b>#{p['id']}</b> — {p['expert_name']}\n"
                          f"  {(p['prediction_text'] or '')[:200]}\n")
         text = "\n".join(lines)
@@ -196,10 +196,10 @@ async def cmd_cancel(message: Message):
     try:
         tid = int(parts[1])
     except ValueError:
-        await message.answer("❌ ID должен быть числом")
+        await message.answer("[ERR] ID должен быть числом")
         return
     ok, msg = _cancel_task(tid)
-    await message.answer(("✅ " if ok else "❌ ") + f"#{tid}: {msg}")
+    await message.answer(("[OK] " if ok else "[ERR] ") + f"#{tid}: {msg}")
 
 
 @router.message(Command("priority"))
@@ -227,7 +227,7 @@ async def cmd_priority(message: Message):
     rated.sort(key=lambda x: -x[3])
     lines = ["<b>🏆 Рейтинг:</b>\n"]
     for i, (e, c, r, acc) in enumerate(rated[:15], 1):
-        lines.append(f"{i}. {e}: {acc}% (✅{c}/❌{r})")
+        lines.append(f"{i}. {e}: {acc}% ([OK]{c}/[ERR]{r})")
     await message.answer("\n".join(lines))
 
 
@@ -270,7 +270,7 @@ async def cmd_cleanup_junk(message: Message):
 
     if not to_delete:
         conn.close()
-        await message.answer("✅ «Пустышек» не найдено")
+        await message.answer("[OK] «Пустышек» не найдено")
         return
 
     placeholders = ",".join("?" * len(to_delete))

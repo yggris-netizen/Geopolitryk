@@ -16,7 +16,7 @@ from services.youtube import get_video_info_ytdlp, _extract_video_id
 
 
 async def _worker_loop(shutdown_event: asyncio.Event):
-    print("🔧 Воркер запущен")
+    print("[TOOL] Воркер запущен")
     while not shutdown_event.is_set():
         try:
             task = _get_next_pending_task()
@@ -29,7 +29,7 @@ async def _worker_loop(shutdown_event: asyncio.Event):
             attempts_before = task['attempts'] or 0
             attempts_now = attempts_before + 1
             print(f"\n{'▓' * 60}")
-            print(f"🔧 ЗАДАЧА #{tid} ({task['source']}, P{task['priority']}, "
+            print(f"[TOOL] ЗАДАЧА #{tid} ({task['source']}, P{task['priority']}, "
                   f"attempts {attempts_before}→{attempts_now}): {url}")
             print(f"{'▓' * 60}")
 
@@ -87,13 +87,13 @@ async def _worker_loop(shutdown_event: asyncio.Event):
                     vid = task['video_id'] or _extract_video_id(url)
                     if vid:
                         _mark_video_processed(vid)
-                    print(f"✅ #{tid} OK")
+                    print(f"[OK] #{tid} OK")
                 else:
                     _handle_task_failure(tid, reason or "unknown", attempts_now)
 
             except Exception as e:
                 err_text = f"{type(e).__name__}: {e}"
-                print(f"❌ #{tid}: {err_text}")
+                print(f"[ERR] #{tid}: {err_text}")
                 traceback.print_exc()
                 try:
                     import sys
@@ -108,7 +108,7 @@ async def _worker_loop(shutdown_event: asyncio.Event):
                 pass
 
         except Exception as e:
-            print(f"⚠️  воркер: {e}")
+            print(f"[WARN]  воркер: {e}")
             traceback.print_exc()
             await asyncio.sleep(WORKER_POLL_INTERVAL)
 

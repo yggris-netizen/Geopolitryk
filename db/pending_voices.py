@@ -47,7 +47,7 @@ def save_pending(video_id: str, video_url: str, embedding: np.ndarray,
         conn.commit()
         return cur.lastrowid
     except Exception as e:
-        print(f"⚠️  save_pending: {e}")
+        print(f"[WARN]  save_pending: {e}")
         return 0
     finally:
         conn.close()

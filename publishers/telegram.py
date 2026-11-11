@@ -19,7 +19,7 @@ import traceback
 from aiogram.enums import ParseMode
 from aiogram.types import LinkPreviewOptions
 
-from config import QUOTE_PREVIEW_LEN, ERROR_PREVIEW_LEN
+from config import QUOTE_PREVIEW_LEN, ERROR_PREVIEW_LEN, COMMENTARY_MIN_CHARS
 from config import (
     CHANNEL_ID, DIAGNOSTIC_MODE, EXTRACT_PREDICTIONS,
     GENERATE_HASHTAGS, GROQ_PREDICTIONS_PAUSE,
@@ -36,9 +36,7 @@ from db.transcripts_raw import save_transcript_raw, get_transcript_raw_segments
 from handlers.voice_registration import build_unknown_notification
 from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
-from services.quote_extraction import extract_quotes
-from services.quote_formatter import format_quotes
-from services.quote_verifier import verify_quotes
+from services.commentary import generate_commentary
 from services.summarization import (
     generate_hashtags, neutralize_title,
     _format_title,
@@ -134,20 +132,20 @@ async def _notify_owner_text(text: str) -> None:
             link_preview_options=NO_PREVIEW,
         )
     except Exception as e:
-        print(f"⚠️  _notify_owner_text: {e}")
+        print(f"[WARN]  _notify_owner_text: {e}")
 
 
 async def _notify_cookies_expired(video_url: str, error_text: str) -> None:
     global _LAST_COOKIES_ALERT_TS
     now = time.time()
     if now - _LAST_COOKIES_ALERT_TS < _COOKIES_ALERT_INTERVAL_SEC:
-        print(f"   ⏭ cookies-алерт пропущен (был недавно)")
+        print(f"   [SKIP] cookies-алерт пропущен (был недавно)")
         return
     _LAST_COOKIES_ALERT_TS = now
     text = (
-        f"🍪 <b>Cookies протухли</b>\n\n"
+        f"[COOKIE] <b>Cookies протухли</b>\n\n"
         f"Скачивание не работает: <code>{error_text[:ERROR_PREVIEW_LEN]}</code>\n\n"
-        f"🔗 {video_url}\n\n"
+        f"[LINK] {video_url}\n\n"
         f"Обновите <code>cookies.txt</code> (Firefox → Get cookies.txt LOCALLY) "
         f"и положите рядом с <code>bot.py</code>."
     )
@@ -180,10 +178,10 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
         try:
             await _bot.send_photo(chat_id=CHANNEL_ID, photo=url,
                                   caption=caption, parse_mode=ParseMode.HTML)
-            print("✅ Фото")
+            print("[OK] Фото")
             sent = True
         except Exception as e:
-            print(f"⚠️  Фото: {e}")
+            print(f"[WARN]  Фото: {e}")
     if not sent:
         await _bot.send_message(
             chat_id=CHANNEL_ID, text=caption,
@@ -191,7 +189,7 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
         )
 
     hashtags = generate_hashtags(_experts_as_string(experts), summary) if GENERATE_HASHTAGS else ""
-    text = f"{summary}\n\n🔗 <a href='{video_url}'>Смотреть оригинал</a>\n"
+    text = f"{summary}\n\n[LINK] <a href='{video_url}'>Смотреть оригинал</a>\n"
     if hashtags:
         text += f"\n{hashtags}\n"
     text += f"\n<i>Сгенерировано автоматически.</i>"
@@ -201,9 +199,9 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
             chat_id=CHANNEL_ID, text=text,
             link_preview_options=NO_PREVIEW,
         )
-        print("✅ Выжимка (без превью ссылки)")
+        print("[OK] Выжимка (без превью ссылки)")
     else:
-        print(f"✂️  Текст {len(text)} > {TELEGRAM_MAX_LEN}, разбиваю...")
+        print(f"[CUT]  Текст {len(text)} > {TELEGRAM_MAX_LEN}, разбиваю...")
         chunks = []
         current = ""
         for paragraph in text.split("\n\n"):
@@ -235,7 +233,7 @@ async def send_expert_post(video_url, video_title, experts, channel_name, summar
                 chat_id=CHANNEL_ID, text=header + part,
                 link_preview_options=NO_PREVIEW,
             )
-            print(f"✅ Выжимка {i}/{len(chunks)} (без превью ссылки)")
+            print(f"[OK] Выжимка {i}/{len(chunks)} (без превью ссылки)")
             await asyncio.sleep(1)
 
 
@@ -268,13 +266,13 @@ async def notify_owner_about_unknown(video_url, video_title, channel_name,
     if not pending_list:
         return
 
-    print(f"💾 pending: сохранено {len(pending_list)} незнакомцев")
+    print(f"[SAVE] pending: сохранено {len(pending_list)} незнакомцев")
 
     if not NOTIFY_UNKNOWN_VOICES:
-        print(f"   ⏭ Уведомление отключено (NOTIFY_UNKNOWN_VOICES=False)")
+        print(f"   [SKIP] Уведомление отключено (NOTIFY_UNKNOWN_VOICES=False)")
         return
 
-    print(f"📤 Уведомление владельцу о {len(pending_list)} незнакомых голосах...")
+    print(f"[UL] Уведомление владельцу о {len(pending_list)} незнакомых голосах...")
     text, keyboard = build_unknown_notification(
         video_url, video_title, pending_list,
         known_experts=experts or [],
@@ -286,7 +284,7 @@ async def notify_owner_about_unknown(video_url, video_title, channel_name,
             link_preview_options=NO_PREVIEW,
         )
     except Exception as e:
-        print(f"⚠️  notify_owner: {e}")
+        print(f"[WARN]  notify_owner: {e}")
 
 
 async def process_and_publish(video_url, video_title="", video_description="",
@@ -313,7 +311,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
             or (not video_description and not channel_name)
         )
         if need_info:
-            print("🔍 yt-dlp (полный заголовок/метаданные)...")
+            print("[SEARCH] yt-dlp (полный заголовок/метаданные)...")
             info = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             full_title = info.get("title", "")
             if full_title and len(full_title) > len(video_title or ""):
@@ -341,29 +339,29 @@ async def process_and_publish(video_url, video_title="", video_description="",
         if vid:
             transcript_text = get_cached_transcript(vid)
             if transcript_text:
-                print(f"💾 транскрипт из кеша ({len(transcript_text)} символов)")
+                print(f"[SAVE] транскрипт из кеша ({len(transcript_text)} символов)")
 
         transcript_segments = []
         clusters = []
 
         if not transcript_text:
-            print("📥 Шаг 1/4: Скачивание...")
+            print("[DL] Шаг 1/4: Скачивание...")
             try:
                 audio_file = await asyncio.to_thread(download_audio, video_url)
             except CookiesExpiredError as e:
-                print(f"   🍪 CookiesExpiredError: {e}")
+                print(f"   [COOKIE] CookiesExpiredError: {e}")
                 await _notify_cookies_expired(video_url, str(e))
                 return False, "cookies_expired"
-            print("✅ Скачано\n")
+            print("[OK] Скачано\n")
 
-            print("🎤 Шаг 2/4: Транскрибация...")
+            print("[MIC] Шаг 2/4: Транскрибация...")
             transcript_text, transcript_segments = await asyncio.to_thread(
                 transcribe_audio, audio_file, duration
             )
-            print(f"📊 Длина: {len(transcript_text)}, сегментов: {len(transcript_segments)}")
+            print(f"[STAT] Длина: {len(transcript_text)}, сегментов: {len(transcript_segments)}")
 
             if audio_file and os.path.exists(audio_file):
-                print("🎤 Шаг 2.5: Voice identification...")
+                print("[MIC] Шаг 2.5: Voice identification...")
                 clusters = await asyncio.to_thread(
                     identify_speakers, audio_file, transcript_segments
                 )
@@ -375,34 +373,34 @@ async def process_and_publish(video_url, video_title="", video_description="",
                     os.remove(audio_file)
                     print("🧹 аудио удалено")
                 except Exception as e:
-                    print(f"⚠️  cleanup audio: {e}")
+                    print(f"[WARN]  cleanup audio: {e}")
             audio_file = None
 
             if vid and transcript_text:
                 save_cached_transcript(vid, transcript_text)
-                print(f"💾 транскрипт сохранён в кеш")
+                print(f"[SAVE] транскрипт сохранён в кеш")
 
         transcript_len = len(transcript_text.strip())
-        print(f"📊 Длина транскрипта: {transcript_len}")
+        print(f"[STAT] Длина транскрипта: {transcript_len}")
 
         if transcript_len < MIN_TRANSCRIPT_CHARS:
             return False, f"transcript_too_short: {transcript_len}"
 
-        print(f"✅ ({transcript_len})\n")
+        print(f"[OK] ({transcript_len})\n")
 
         if DIAGNOSTIC_MODE:
-            print("🔧 ДИАГНОСТИКА: транскрибация прошла")
+            print("[TOOL] ДИАГНОСТИКА: транскрибация прошла")
             return True, f"diagnostic_ok: {transcript_len}"
 
         display_title = video_title
         if NEUTRALIZE_TITLE and video_title:
-            print("🎨 Нейтрализация...")
+            print("[STYLE] Нейтрализация...")
             n = neutralize_title(video_title)
             if n and n != video_title:
                 display_title = n
-                print(f"✅ {display_title}\n")
+                print(f"[OK] {display_title}\n")
 
-        print("🔍 Спикеры...")
+        print("[SEARCH] Спикеры...")
         experts, unknown = detect_experts(
             video_title, transcript_text,
             channel_name=channel_name,
@@ -411,7 +409,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
         )
         for e in experts:
             spk = f" [{e.get('speaker', '')}]" if e.get("speaker") else ""
-            print(f"   ✅ {e['name']}{spk}")
+            print(f"   [OK] {e['name']}{spk}")
         print()
 
         if unknown:
@@ -431,47 +429,37 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 duration_sec=int(duration or 0),
                 schema_version=2,
             )
-            print(f"💾 transcripts_raw сохранён ({len(transcript_segments)} сегментов)\n")
+            print(f"[SAVE] transcripts_raw сохранён ({len(transcript_segments)} сегментов)\n")
 
         # Если транскрипт из кеша — сегменты могли не загрузиться
         if not transcript_segments and vid:
             transcript_segments = get_transcript_raw_segments(vid)
             if transcript_segments:
-                print(f"💾 сегменты из transcripts_raw: {len(transcript_segments)}\n")
+                print(f"[SAVE] сегменты из transcripts_raw: {len(transcript_segments)}\n")
 
-        print("🧠 Шаг 3/4: Суммаризация с цитатами...")
-        quotes_json = extract_quotes(transcript_text, transcript_segments)
-        try:
-            total_quotes = len(json.loads(quotes_json))
-        except Exception:
-            total_claims = 0
-        print(f"   Цитат: {total_quotes}")
-
-        print("🔍 NLI-проверка...")
-        verified, stats = verify_quotes(quotes_json, transcript_segments)
-        print(f"   Статистика: {stats}")
-
-        if not verified:
+        print("[LLM] Шаг 3/4: Комментарий...")
+        commentary_text = generate_commentary(transcript_text, transcript_segments)
+        if not commentary_text or len(commentary_text) < COMMENTARY_MIN_CHARS:
             msg = (
-                f"⚠️ <b>Не публикую</b>: 0 verified тезисов\n\n"
-                f"🔗 {video_url}\n"
-                f"📊 {stats}"
+                f"[WARN] <b>Не публикую</b>: комментарий пуст или короткий\n\n"
+                f"[LINK] {video_url}\n"
+                f"[STAT] Длина: {len(commentary_text)} символов"
             )
             await _notify_owner_text(msg)
-            print(f"❌ no_verified_claims: {stats}")
-            return False, "no_verified_claims"
+            print(f"[ERR] no_commentary: {len(commentary_text)} символов")
+            return False, "no_commentary"
 
-        summary_text = format_quotes(verified, transcript_segments)
-        print(f"✅ Verified: {len(verified)} цитат\n")
+        summary_text = commentary_text
+        print(f"[OK] Комментарий: {len(commentary_text)} символов\n")
 
-        print("📤 Шаг 4/4: Отправка...")
+        print("[UL] Шаг 4/4: Отправка...")
         await send_expert_post(
             video_url=video_url, video_title=display_title,
             experts=experts,
             channel_name=channel_name, summary=summary_text,
             published_at=published_at,
         )
-        print("✅ Опубликовано\n")
+        print("[OK] Опубликовано\n")
 
         experts_str = _experts_as_string(experts)
         main_speaker = ""
@@ -485,31 +473,31 @@ async def process_and_publish(video_url, video_title="", video_description="",
 
         if EXTRACT_PREDICTIONS:
             try:
-                print(f"⏸  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами...")
+                print(f"[PAUSE]  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами...")
                 await asyncio.sleep(GROQ_PREDICTIONS_PAUSE)
-                print("📊 Прогнозы...")
+                print("[STAT] Прогнозы...")
                 preds = extract_predictions(transcript_text, experts_str)
                 if preds:
                     saved = _save_predictions(
                         vid, experts_str, channel_name, preds,
                         speaker_id=main_speaker,
                     )
-                    print(f"✅ Сохранено {saved}")
+                    print(f"[OK] Сохранено {saved}")
                 else:
                     print("   нет")
             except Exception as e:
-                print(f"⚠️  прогнозы: {e}")
+                print(f"[WARN]  прогнозы: {e}")
 
         return True, ""
 
     except Exception as e:
         err_type = type(e).__name__
         err_msg = str(e)[:500]
-        print(f"\n❌ {err_type}: {err_msg}")
+        print(f"\n[ERR] {err_type}: {err_msg}")
         traceback.print_exc()
         if audio_file and os.path.exists(audio_file):
             try:
                 os.remove(audio_file)
             except Exception as e:
-                print(f"⚠️  cleanup audio (error): {e}")
+                print(f"[WARN]  cleanup audio (error): {e}")
         return False, f"{err_type}: {err_msg}"

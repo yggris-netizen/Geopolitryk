@@ -108,7 +108,7 @@ def _mark_task_retry(task_id, error_message):
     )
     conn.commit()
     conn.close()
-    print(f"   ⏸  #{task_id} → retry через {delay_minutes}м{jitter_seconds}с "
+    print(f"   [PAUSE]  #{task_id} → retry через {delay_minutes}м{jitter_seconds}с "
           f"(attempts={attempts}, err={error_message[:80]})")
 
 
@@ -118,7 +118,7 @@ def _handle_task_failure(task_id, reason, attempts_now):
         _mark_task_retry(task_id, reason)
     else:
         _mark_task_done(task_id, error_message=reason)
-        print(f"   ⚠️  #{task_id} → error "
+        print(f"   [WARN]  #{task_id} → error "
               f"(class={err_class}, attempts={attempts_now}/{MAX_TASK_ATTEMPTS}): "
               f"{reason[:120]}")
 

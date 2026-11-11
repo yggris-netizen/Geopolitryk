@@ -44,7 +44,7 @@ def _load_model():
         return _speechbrain_model
     try:
         from speechbrain.inference.speaker import EncoderClassifier
-        print("📥 Загружаю SpeechBrain ECAPA (может занять 30–60 секунд)...")
+        print("[DL] Загружаю SpeechBrain ECAPA (может занять 30–60 секунд)...")
         model_dir = os.path.join(_PROJECT_DIR, "pretrained_models", "spkrec-ecapa-voxceleb")
         os.makedirs(model_dir, exist_ok=True)
         kwargs = {
@@ -54,13 +54,13 @@ def _load_model():
         }
         if _LOCAL_STRATEGY is not None:
             kwargs["local_strategy"] = _LOCAL_STRATEGY
-            print(f"   📋 local_strategy = {_LOCAL_STRATEGY}")
+            print(f"   [LIST] local_strategy = {_LOCAL_STRATEGY}")
         _speechbrain_model = EncoderClassifier.from_hparams(**kwargs)
         SPEECHBRAIN_AVAILABLE = True
-        print("✅ SpeechBrain ECAPA OK")
+        print("[OK] SpeechBrain ECAPA OK")
         return _speechbrain_model
     except Exception as e:
-        print(f"❌ SpeechBrain не загрузился: {e}")
+        print(f"[ERR] SpeechBrain не загрузился: {e}")
         SPEECHBRAIN_AVAILABLE = False
         return None
 
@@ -90,7 +90,7 @@ def _load_waveform(audio_path: str, start_sec: float = None, end_sec: float = No
             waveform = F.resample(waveform, orig_freq=sr, new_freq=target_sr)
         return waveform
     except Exception as e:
-        print(f"⚠️  _load_waveform: {e}")
+        print(f"[WARN]  _load_waveform: {e}")
         return None
 
 
@@ -115,7 +115,7 @@ def get_embedding(audio_path: str, start_sec: float = None,
             return None
         return emb_np
     except Exception as e:
-        print(f"⚠️  get_embedding: {e}")
+        print(f"[WARN]  get_embedding: {e}")
         return None
 
 

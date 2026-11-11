@@ -70,11 +70,11 @@ def identify_speakers(audio_path: str, transcript_segments: list,
 
     all_chunks = _group_segments(transcript_segments)
     if not all_chunks:
-        print("⚠️  voice_identification: нет кусков >= 10 сек")
+        print("[WARN]  voice_identification: нет кусков >= 10 сек")
         return []
 
     chunks = _sample_chunks(all_chunks, max_chunks)
-    print(f"🎤 Voice identification: {len(chunks)} кусков (из {len(all_chunks)} всего)...")
+    print(f"[MIC] Voice identification: {len(chunks)} кусков (из {len(all_chunks)} всего)...")
 
     chunk_embeddings = []
     for i, (start, end) in enumerate(chunks):
@@ -90,7 +90,7 @@ def identify_speakers(audio_path: str, transcript_segments: list,
         print(f"   [{i+1}/{len(chunks)}] {start:.0f}–{end:.0f}с → embedding OK")
 
     if not chunk_embeddings:
-        print("⚠️  voice_identification: не удалось извлечь ни одного embedding")
+        print("[WARN]  voice_identification: не удалось извлечь ни одного embedding")
         return []
 
     clusters = []
@@ -122,7 +122,7 @@ def identify_speakers(audio_path: str, transcript_segments: list,
     for idx, cl in enumerate(clusters):
         total_dur = sum(c["duration"] for c in cl["chunks"])
         if total_dur < MIN_SPEAKER_DURATION_SEC:
-            print(f"   ⏭  кластер {idx}: {total_dur:.1f}с < {MIN_SPEAKER_DURATION_SEC}с — пропускаю")
+            print(f"   [SKIP]  кластер {idx}: {total_dur:.1f}с < {MIN_SPEAKER_DURATION_SEC}с — пропускаю")
             continue
         mean_emb = np.mean(cl["embeddings"], axis=0).astype(np.float32)
         result.append({
@@ -133,7 +133,7 @@ def identify_speakers(audio_path: str, transcript_segments: list,
         })
 
     result.sort(key=lambda x: -x["duration_sec"])
-    print(f"   ✅ Найдено спикеров: {len(result)}")
+    print(f"   [OK] Найдено спикеров: {len(result)}")
     for r in result:
         print(f"      {r['speaker_id']}: {r['duration_sec']:.1f}с")
     return result
