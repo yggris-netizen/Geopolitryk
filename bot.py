@@ -2,7 +2,7 @@
 YouTube → Telegram бот: аналитические выжимки.
 Точка входа: инициализация, роутеры, воркер, планировщик.
 
-v2.1.0-local: voice fingerprinting, все каналы одного типа, «Спикеры: A, B».
+v2.1.13-local: PubSubHubbub listener (ytnoti) + scheduler (fallback).
 """
 
 import asyncio
@@ -269,12 +269,22 @@ async def _main():
     worker_task = asyncio.create_task(_worker_loop(_SHUTDOWN_EVENT))
     scheduler = build_scheduler(bot, _SHUTDOWN_EVENT)
     scheduler.start()
+
+    # PubSubHubbub listener (лягушка) — параллельно с scheduler
+    try:
+        from workers.pubsub_listener import start_listener_thread
+        start_listener_thread()
+        print("[LIVE] PubSubHubbub listener запущен (лягушка)")
+    except Exception as e:
+        print(f"[WARN]  ytnoti listener: {e}")
+
     print("[SEARCH] [9/10] scheduler запущен")
 
     print(f"\n{'=' * 60}")
     print("[START] БОТ ГОТОВ")
     print(f"   Воркер: запущен")
     print(f"   Планировщик: каждые {CHECK_INTERVAL_HOURS} ч")
+    print(f"   Лягушка: PubSubHubbub (ytnoti)")
     print(f"   Глубина: {HOURS_BACK} ч")
     print(f"   Whisper: {WHISPER_MODE} ({GROQ_WHISPER_MODEL})")
     print(f"   Модель LLM: {GROQ_MODEL}")
