@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """D3: Нейтральный пересказ интервью (Map-Reduce, без NLI).
 
-Один проход Map (task="low" -> 20b): theses + qa_pairs.
-Код-проверка цитат: _find_quote_in_segments (in/fuzzy).
-Reduce (task="high" -> qwen): нейтральный пересказ, близко к тексту.
+A+C: Map возвращает ТОЛЬКО question + start (без quote) — цитата берётся из сегментов.
+C: чередование моделей Map — чётные чанки (1,3,5) → low (20b), нечётные (2,4,6) → medium (120b).
+   Разные TPD-корзины → меньше TPD -> fallback.
+Map: max_tokens=3000.
+Reduce: task="high" (qwen) — нейтральный пересказ.
+Fallback: fuzzy 85 (если код не нашёл сегмент).
 Имена/названия: _fix_names (Whisper-ошибки).
-Fallback: простой пересказ из тезисов.
-
-P1.2: float(qa.get("start", 0)) — защита от None.
-P1.3: промпт Map — дословные цитаты (точная подстрока).
 """
 
 import re
@@ -82,10 +81,55 @@ def _fix_names(text: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-# Map: извлечение тезисов + qa_pairs из чанка
+# A+C: цитата из сегментов (вокруг start)
 # ═══════════════════════════════════════════════════════════
-def _extract_theses_chunk(chunk: str, chunk_offset_sec: float = 0) -> dict:
-    """Map: важные тезисы + связки "вопрос→ответ" из чанка."""
+def _quote_from_segments(start: float, segments: list,
+                         window: int = 2, max_len: int = 500) -> str:
+    """Берёт цитату из сегментов вокруг start (±window)."""
+    if not segments or start is None:
+        return ""
+
+    best_idx = -1
+    best_diff = float("inf")
+    for i, seg in enumerate(segments):
+        seg_start = _safe_float(seg.get("start"), 0.0)
+        diff = abs(seg_start - start)
+        if diff < best_diff:
+            best_diff = diff
+            best_idx = i
+
+    if best_idx < 0:
+        return ""
+
+    lo = max(0, best_idx - window)
+    hi = min(len(segments), best_idx + window + 1)
+    quote_segments = segments[lo:hi]
+
+    text = " ".join((s.get("text") or "").strip() for s in quote_segments).strip()
+    if not text:
+        return ""
+
+    if len(text) > max_len:
+        truncated = text[:max_len]
+        for sep in (". ", "! ", "? "):
+            pos = truncated.rfind(sep)
+            if pos > max_len * 0.5:
+                truncated = truncated[:pos + 1]
+                break
+        text = truncated.strip()
+
+    return text
+
+
+# ═══════════════════════════════════════════════════════════
+# Map: извлечение тезисов + question + start (без quote)
+# ═══════════════════════════════════════════════════════════
+def _extract_theses_chunk(chunk: str, chunk_offset_sec: float = 0,
+                          task: str = "low") -> dict:
+    """Map: важные тезисы + связки (только question + start).
+
+    task="low" (20b) / "medium" (120b) — чередование (C).
+    """
     prompt = f"""Ты — аналитик. Прочитай фрагмент интервью и выдели ТОЛЬКО важное.
 
 ТЕКСТ:
@@ -99,20 +143,19 @@ def _extract_theses_chunk(chunk: str, chunk_offset_sec: float = 0) -> dict:
 3. Тезисы формулируй БЛИЗКО К ТЕКСТУ: сохраняй смысл и формулировки эксперта, но ИСПРАВЛЯЙ ошибки распознавания (например, «Армус» → «Ормуз», «Хексет» → «Хегсет»). 1-2 предложения на тезис, грамматически корректно.
 4. Если есть ЧЁТКАЯ СВЯЗКА "вопрос ведущего -> развёрнутый ответ эксперта" — выдели отдельно:
    - question: дословный вопрос ведущего (скопируй символ в символ).
-   - quote: ДОСЛОВНЫЙ ответ эксперта — ТОЧНАЯ ПОДСТРОКА из ТЕКСТА (скопируй 1-3 предложения символ в символ, НЕ перефразируй, НЕ добавляй «Автор объясняет», «Эксперт отмечает», НЕ меняй порядок слов). Если не можешь скопировать точно — ПРОПУСТИ эту связку.
-   - start: секунды от начала фрагмента.
+   - start: секунды от начала фрагмента (когда начинается ОТВЕТ эксперта).
 
 Верни ТОЛЬКО JSON, без markdown, без пояснений:
-{{"theses": ["тезис 1", "тезис 2"], "qa_pairs": [{{"question": "...", "quote": "...", "start": 0.0}}]}}
+{{"theses": ["тезис 1", "тезис 2"], "qa_pairs": [{{"question": "...", "start": 0.0}}]}}
 
 JSON:"""
     try:
         raw = _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
+            max_tokens=3000,  # C: 2000 -> 3000 (JSON не обрезан)
             temperature=0.2,
             reasoning_effort="low",
-            task="low",
+            task=task,  # C: "low" (20b) или "medium" (120b)
         )
         if not raw:
             print(f"      [WARN]  theses: пустой ответ")
@@ -124,7 +167,6 @@ JSON:"""
         if isinstance(data, dict):
             theses = data.get("theses", []) or []
             qa_pairs = data.get("qa_pairs", []) or []
-            # P1.2: безопасное приведение start (защита от None)
             for qa in qa_pairs:
                 if isinstance(qa, dict):
                     start_raw = qa.get("start")
@@ -136,24 +178,35 @@ JSON:"""
 
 
 # ═══════════════════════════════════════════════════════════
-# Код-проверка: цитаты есть в транскрипте? (in/fuzzy)
+# A: проверка qa_pairs — цитата из сегментов (fallback: fuzzy 85)
 # ═══════════════════════════════════════════════════════════
 def _verify_qa_pairs(qa_pairs: list, segments: list) -> list:
     verified = []
     for qa in qa_pairs:
-        quote = (qa.get("quote") or "").strip()
-        if not quote:
+        question = (qa.get("question") or "").strip()
+        start = _safe_float(qa.get("start"), 0.0)
+        if not question:
             continue
-        seg, seg_idx = _find_quote_in_segments(quote, segments)
-        if seg:
+
+        quote = _quote_from_segments(start, segments, window=2, max_len=500)
+
+        if not quote:
+            seg, seg_idx = _find_quote_in_segments(question, segments)
+            if seg:
+                idx = seg_idx if seg_idx is not None else 0
+                lo = max(0, idx - 1)
+                hi = min(len(segments), idx + 3)
+                quote = " ".join((s.get("text") or "").strip() for s in segments[lo:hi]).strip()
+
+        if quote and len(quote) >= 10:
             verified.append({
-                "question": qa.get("question", ""),
+                "question": question,
                 "quote": quote,
-                "start": _safe_float(seg.get("start"), 0.0),  # P1.2
+                "start": start,
             })
             print(f"   [OK] qa verified: {quote[:60]}")
         else:
-            print(f"   [ERR] qa not_found: {quote[:60]}")
+            print(f"   [ERR] qa not_found: {question[:60]}")
     return verified
 
 
@@ -215,10 +268,10 @@ def _fallback_theses(theses: list, qa_pairs: list) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-# Главная: D3 (один проход Map, без consensus)
+# Главная: D3 (один проход Map, чередование моделей)
 # ═══════════════════════════════════════════════════════════
 def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
-    """D3: Map-Reduce, один проход, без NLI."""
+    """D3: Map-Reduce, один проход, без NLI (A+C, чередование)."""
     if not transcript_text or not transcript_segments:
         return ""
 
@@ -237,14 +290,16 @@ def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
     all_theses = []
     all_qa = []
     for idx, (chunk, off) in enumerate(chunks, 1):
-        print(f"      {idx}/{len(chunks)}...")
-        result = _extract_theses_chunk(chunk, off)
+        # C: чередование — нечётные (1,3,5) → low (20b), чётные (2,4,6) → medium (120b)
+        task = "low" if (idx % 2 == 1) else "medium"
+        print(f"      {idx}/{len(chunks)} (task={task})...")
+        result = _extract_theses_chunk(chunk, off, task=task)
         all_theses.extend(result.get("theses", []))
         all_qa.extend(result.get("qa_pairs", []))
         if idx < len(chunks):
             time.sleep(GROQ_DELAY_BETWEEN_CHUNKS)
 
-    print("[SEARCH] Проверка цитат (in/fuzzy)...")
+    print("[SEARCH] Проверка цитат (A: из сегментов)...")
     verified_qa = _verify_qa_pairs(all_qa, transcript_segments)
 
     print("[STYLE] Reduce: пересказ...")
