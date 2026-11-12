@@ -11,6 +11,7 @@ from config import (GROQ_TASK_MODELS,
     MAX_PREDICTION_HORIZON_YEARS, MAX_PREDICTIONS_PER_VIDEO,
 )
 from services.llm import groq_client, groq_chat_create
+from db.token_usage import mark_exhausted
 
 
 _SAFE_INPUT_CHARS = 6000
@@ -68,7 +69,7 @@ JSON:"""
 
 def _call_groq(prompt):
     """Groq с каскадом моделей: TPD → fallback, TPM → retry."""
-    models = GROQ_TASK_MODELS["high"]
+    models = list(GROQ_TASK_MODELS["high"])  # copy: не мутировать config
     if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
         models.append(GROQ_FALLBACK_MODEL)
 
@@ -78,6 +79,7 @@ def _call_groq(prompt):
         for attempt in range(GROQ_MAX_RETRIES):
             try:
                 return groq_chat_create(
+                    task="high",
                     messages=[{"role": "user", "content": prompt}],
                     model=model, temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS,
                 )
@@ -85,7 +87,19 @@ def _call_groq(prompt):
                 last_err = e
                 err = str(e).lower()
 
+                if "tpd_exhausted" in err:
+                    short = model.split("/")[-1]
+                    if not is_last:
+                        next_short = models[mi + 1].split("/")[-1]
+                        print(f"      [TPD] [predictions] {short} → {next_short}")
+                        break
+                    raise RuntimeError(f"TPD exhausted on all models (predictions): {e}")
+
                 if "tokens per day" in err or "tpd" in err:
+                    try:
+                        mark_exhausted(model, "high")
+                    except Exception:
+                        pass
                     short = model.split("/")[-1]
                     if not is_last:
                         next_short = models[mi + 1].split("/")[-1]

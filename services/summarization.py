@@ -13,6 +13,7 @@ from config import (
     SUMMARIZE_PARTIAL_TOKENS,
 )
 from services.llm import groq_client, groq_chat_create
+from db.token_usage import mark_exhausted
 
 
 def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effort="low", task="medium"):
@@ -36,13 +37,13 @@ def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effor
                 if "gpt-oss" in model and reasoning_effort:
                     try:
                         r = groq_chat_create(
-                            reasoning_effort=reasoning_effort, **kwargs
+                            reasoning_effort=reasoning_effort, task=task, **kwargs
                         )
                     except TypeError:
                         # старый SDK — без reasoning_effort
-                        r = groq_chat_create(**kwargs)
+                        r = groq_chat_create(task=task, **kwargs)
                 else:
-                    r = groq_chat_create(**kwargs)
+                    r = groq_chat_create(task=task, **kwargs)
 
                 msg = r.choices[0].message
                 content = (msg.content or "").strip()
@@ -60,9 +61,17 @@ def _call_groq_with_retry(messages, max_tokens, temperature=0.2, reasoning_effor
             except Exception as e:
                 err = str(e).lower()
                 last_error = e
-                if ("tokens per day" in err or "tpd" in err) and not is_last:
-                    print(f"      [RETRY] TPD -> fallback")
+                if "tpd_exhausted" in err and not is_last:
+                    print(f"      [TPD] {model}: предохранитель -> fallback")
                     break
+                if ("tokens per day" in err or "tpd" in err):
+                    try:
+                        mark_exhausted(model, task)
+                    except Exception:
+                        pass
+                    if not is_last:
+                        print(f"      [RETRY] TPD -> fallback")
+                        break
                 if ("429" in err or "rate_limit" in err) and attempt < GROQ_MAX_RETRIES - 1:
                     wait = 30
                     m = re.search(r'try again in ([\d.]+)s', str(e))

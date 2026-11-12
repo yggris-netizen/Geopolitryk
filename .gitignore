@@ -84,3 +84,8 @@ bot_v2026-10-23.py
 *.md.bak
 /label_tmp.py
 /label_tmp.py
+
+# v2.1.20-local: миграция (автодобавлено check_before_commit.py)
+russian_trusted_root_ca_pem.crt
+*.bak*
+storage/

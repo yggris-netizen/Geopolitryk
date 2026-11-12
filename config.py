@@ -82,6 +82,24 @@ GROQ_TASK_MODELS = {
 
 MAX_TASK_ATTEMPTS = int(os.getenv("MAX_TASK_ATTEMPTS", "5"))
 DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
+# Отладочный вывод загрузки ([SEARCH] [N/10] ...). Включать: DEBUG_BOOT=1 в .env
+DEBUG_BOOT = os.getenv("DEBUG_BOOT", "0").lower() in ("1", "true", "yes")
+
+# ─── GigaChat (fallback для Groq) ──────────────────────
+# Authorization Key (длинная строка из личного кабинета Sber Studio).
+GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY", "")
+USE_GIGACHAT = os.getenv("USE_GIGACHAT", "0").lower() in ("1", "true", "yes")
+GIGACHAT_MODEL_LOW = os.getenv("GIGACHAT_MODEL_LOW", "GigaChat-2")
+GIGACHAT_MODEL_HIGH = os.getenv("GIGACHAT_MODEL_HIGH", "GigaChat-2-Pro")
+
+# ─── Локальная модель (Ollama) — fallback для MAP ─────
+# Saiga-Llama3-8B: 8B, русский, 8192 контекст. RusMind — запасная.
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "0").lower() in ("1", "true", "yes")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "akdengi/saiga-llama3-8b:latest")
+OLLAMA_MODEL_FALLBACK = os.getenv("OLLAMA_MODEL_FALLBACK", "hf.co/DICPlay/RusMind-Zernyshko-2.0-GGUF:latest")
+
+
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
 GROQ_MAX_CHUNK_SECONDS = int(os.getenv("GROQ_MAX_CHUNK_SECONDS", "300"))
 HEARTBEAT_HOURS = int(os.getenv("HEARTBEAT_HOURS", "0"))
@@ -132,14 +150,16 @@ else:
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 # 7 каналов (v2.1.7: убраны MayiakUA, Свободный, Легіст)
+# v2.1.20-local: 3 тестовых канала (миграция на сервер).
+# Остальные 4 закомментированы - вернуть после стабилизации.
 CHANNELS_TO_WATCH = [
     {"id": "UCSRtRl2Msw71NnYQduHmMgw", "name": "Александр Шелест"},
     {"id": "UCT0ve_Yq3PPSjw3pJDOK5DA", "name": "Руслан Бортник"},
-    {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live"},
-    {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС"},
     {"id": "UCHgiqmsIHN2PlQnBIRFRGGg", "name": "Politeka Online"},
-    {"id": "UCxkdtxa54kQLRmmWaBH0K2w", "name": "UKRLIFETV"},
-    {"id": "UC8CAQSzI8OdvubZi_PR6JKg", "name": "PolitExpert"},
+    # {"id": "UCe3crzYhR7bx4sTY-83H2Gg", "name": "Дикий live"},
+    # {"id": "UCdGKO6B6OWbEtWRk6bx4HkA", "name": "КАТАРСИС"},
+    # {"id": "UCxkdtxa54kQLRmmWaBH0K2w", "name": "UKRLIFETV"},
+    # {"id": "UC8CAQSzI8OdvubZi_PR6JKg", "name": "PolitExpert"},
 ]
 
 TEST_VIDEO_URL = ""

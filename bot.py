@@ -5,6 +5,9 @@ YouTube → Telegram бот: аналитические выжимки.
 v2.1.13-local: PubSubHubbub listener (ytnoti) + scheduler (fallback).
 """
 
+import warnings as _warnings
+_warnings.filterwarnings("ignore", category=FutureWarning, module="google.api_core")
+
 import asyncio
 import os
 import signal
@@ -24,7 +27,7 @@ from config import (
     MAX_VIDEOS_PER_CHANNEL_PER_CHECK, OWNER_USER_ID,
     SERVICE_ACCOUNT_FILE, TEST_VIDEO_TITLE, TEST_VIDEO_URL,
     WHISPER_MODE, WHISPER_MODEL_SIZE, CHANNELS_TO_WATCH,
-    CHECK_INTERVAL_HOURS, DIAGNOSTIC_MODE,
+    CHECK_INTERVAL_HOURS, DIAGNOSTIC_MODE, DEBUG_BOOT,
 )
 from experts import KNOWN_EXPERT_BIOS, KNOWN_EXPERT_FULL
 
@@ -47,6 +50,12 @@ from workers.scheduler import check_all_channels, build_scheduler
 
 
 _SHUTDOWN_EVENT = None
+
+
+def _dbg_boot(*args, **kwargs):
+    """Печать только при DEBUG_BOOT=1 (отладка загрузки)."""
+    if DEBUG_BOOT:
+        print(*args, **kwargs)
 
 
 print("=" * 60)
@@ -113,9 +122,9 @@ async def _main():
     global _SHUTDOWN_EVENT
     _SHUTDOWN_EVENT = asyncio.Event()
 
-    print("[SEARCH] [1/10] _main() стартовал")
-    print(f"[SEARCH] sys.argv = {sys.argv}")
-    print(f"[SEARCH] CWD = {os.getcwd()}")
+    _dbg_boot("[SEARCH] [1/10] _main() стартовал")
+    _dbg_boot(f"[SEARCH] sys.argv = {sys.argv}")
+    _dbg_boot(f"[SEARCH] CWD = {os.getcwd()}")
 
     def _handle_shutdown_signal():
         print("\n[STOP] Получен сигнал завершения")
@@ -123,7 +132,7 @@ async def _main():
 
     try:
         loop = asyncio.get_running_loop()
-        print(f"[SEARCH] [2/10] Running loop: {type(loop).__name__}")
+        _dbg_boot(f"[SEARCH] [2/10] Running loop: {type(loop).__name__}")
     except Exception as e:
         print(f"[WARN]  get_running_loop: {e}")
 
@@ -132,13 +141,13 @@ async def _main():
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, _handle_shutdown_signal)
-                print(f"[SEARCH] signal {sig.name} зарегистрирован")
+                _dbg_boot(f"[SEARCH] signal {sig.name} зарегистрирован")
             except (NotImplementedError, RuntimeError, ValueError) as _e:
-                print(f"[SEARCH] signal {sig.name} не зарегистрирован ({type(_e).__name__})")
+                _dbg_boot(f"[SEARCH] signal {sig.name} не зарегистрирован ({type(_e).__name__})")
     except Exception as e:
         print(f"[WARN]  signal setup: {e}")
 
-    print("[SEARCH] [3/10] CLI checks")
+    _dbg_boot("[SEARCH] [3/10] CLI checks")
     if "--predictions" in sys.argv:
         _init_db()
         conn = sqlite3.connect(DB_PATH)
@@ -251,21 +260,21 @@ async def _main():
         await bot.session.close()
         return
 
-    print("[SEARCH] [4/10] перед _init_db")
+    _dbg_boot("[SEARCH] [4/10] перед _init_db")
     _cleanup_temp_files()
     _init_db()
-    print("[SEARCH] [5/10] после _init_db")
+    _dbg_boot("[SEARCH] [5/10] после _init_db")
 
     if TEST_VIDEO_URL:
         print("\n🧪 ТЕСТ")
         ok, reason = await process_and_publish(TEST_VIDEO_URL, video_title=TEST_VIDEO_TITLE)
         print(f"Тест: {'[OK] OK' if ok else '[ERR] ' + reason}")
 
-    print("[SEARCH] [6/10] перед check_all_channels")
+    _dbg_boot("[SEARCH] [6/10] перед check_all_channels")
     await check_all_channels(_SHUTDOWN_EVENT)
-    print("[SEARCH] [7/10] после check_all_channels")
+    _dbg_boot("[SEARCH] [7/10] после check_all_channels")
 
-    print("[SEARCH] [8/10] создаю воркер и планировщик")
+    _dbg_boot("[SEARCH] [8/10] создаю воркер и планировщик")
     worker_task = asyncio.create_task(_worker_loop(_SHUTDOWN_EVENT))
     scheduler = build_scheduler(bot, _SHUTDOWN_EVENT)
     scheduler.start()
@@ -278,7 +287,7 @@ async def _main():
     except Exception as e:
         print(f"[WARN]  ytnoti listener: {e}")
 
-    print("[SEARCH] [9/10] scheduler запущен")
+    _dbg_boot("[SEARCH] [9/10] scheduler запущен")
 
     print(f"\n{'=' * 60}")
     print("[START] БОТ ГОТОВ")
@@ -292,7 +301,7 @@ async def _main():
     print(f"   БД: {DB_PATH}")
     print(f"{'=' * 60}\n")
 
-    print("[SEARCH] [10/10] запускаю dp.start_polling()")
+    _dbg_boot("[SEARCH] [10/10] запускаю dp.start_polling()")
     try:
         await dp.start_polling(bot)
     finally:

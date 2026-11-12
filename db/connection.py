@@ -216,5 +216,20 @@ def _init_db():
     if n_max:
         print(f"🛑 Помечено error (max attempts {MAX_TASK_ATTEMPTS}): {n_max}")
 
+    # ─── token_usage (TPD Circuit Breaker) ────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model TEXT NOT NULL,
+            task TEXT,
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_model_date "
+                 "ON token_usage(model, created_at)")
+
     conn.commit()
     conn.close()

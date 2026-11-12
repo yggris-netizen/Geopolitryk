@@ -94,6 +94,18 @@ def _is_cookies_error(err_text: str) -> bool:
     )
 
 
+class _YdlSilent:
+    """yt-dlp logger: info молчит, error печатает."""
+    def debug(self, msg):
+        pass
+    def info(self, msg):
+        pass
+    def warning(self, msg):
+        pass
+    def error(self, msg):
+        print(f"[DL-ERR] {msg}")
+
+
 def download_audio(url: str, output_path: str = "audio.mp3") -> str:
     base = os.path.splitext(output_path)[0]
     for ext in (".mp3", ".m4a", ".webm", ".opus", ".mp4", ".ogg", ".wav", ".aac", ".flac"):
@@ -108,7 +120,10 @@ def download_audio(url: str, output_path: str = "audio.mp3") -> str:
     ydl_opts = {
         'format': 'bestaudio[abr<=96]/bestaudio/best',
         'outtmpl': base + ".%(ext)s",
-        'quiet': False,
+        'quiet': True,
+        'logger': _YdlSilent(),
+        'no_warnings': True,
+        'noprogress': True,
         'noplaylist': True,
         'cookiefile': COOKIEFILE,
         'extractor_args': {

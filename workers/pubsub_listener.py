@@ -80,7 +80,7 @@ async def callback(request: Request):
 
 
 def _run_uvicorn():
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning", access_log=False)
 
 
 def run_listener() -> None:

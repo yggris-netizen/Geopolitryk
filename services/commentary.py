@@ -290,8 +290,14 @@ def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
     all_theses = []
     all_qa = []
     for idx, (chunk, off) in enumerate(chunks, 1):
-        # C: чередование — нечётные (1,3,5) → low (20b), чётные (2,4,6) → medium (120b)
-        task = "low" if (idx % 2 == 1) else "medium"
+        # C: умное чередование — если корзина исчерпана, уходим на соседнюю
+        from db.token_usage import can_call as _tpd_can
+        _low_ok = _tpd_can("llama-3.1-8b-instant")
+        _med_ok = _tpd_can("llama-3.3-70b-versatile")
+        if idx % 2 == 1:
+            task = "low" if _low_ok else "medium"
+        else:
+            task = "medium" if _med_ok else "low"
         print(f"      {idx}/{len(chunks)} (task={task})...")
         result = _extract_theses_chunk(chunk, off, task=task)
         all_theses.extend(result.get("theses", []))

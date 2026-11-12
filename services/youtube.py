@@ -18,6 +18,7 @@ from config import (
     YOUTUBE_CACHE_MAX_ENTRIES,
 )
 from services.youtube_api import youtube
+from services.transcription import _YdlSilent
 from db.videos import _is_video_processed
 
 # Условный путь к cookies: локально — относительный, на Bothost — /app/data/
@@ -355,6 +356,8 @@ def get_video_info_ytdlp(url: str) -> dict:
     try:
         with yt_dlp.YoutubeDL({
             'quiet': True,
+            'no_warnings': True,
+            'logger': _YdlSilent(),
             'skip_download': True,
             'cookiefile': COOKIEFILE,
             'extractor_args': {
