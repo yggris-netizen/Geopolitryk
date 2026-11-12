@@ -18,6 +18,7 @@ import numpy as np
 
 from db.voice_profiles import get_all_profiles
 from services.speaker_embedding import cosine_similarity
+from experts import KNOWN_EXPERT_BIOS, KNOWN_EXPERT_FULL
 from config import (
     NEGATIVE_COS_THRESHOLD as NEGATIVE_COS_THRESHOLD_CONFIG,
     NEGATIVE_DIFF_THRESHOLD as NEGATIVE_DIFF_THRESHOLD_CONFIG,
@@ -47,6 +48,31 @@ def _find_top_n_matches(embedding, profiles: list, threshold: float, n: int = 2)
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:n]
 
+
+
+
+def _get_specialization(name: str) -> str:
+    """Возвращает специализацию эксперта из KNOWN_EXPERT_BIOS."""
+    if not name:
+        return ""
+    key = name.lower().strip()
+    # Прямое совпадение
+    if key in KNOWN_EXPERT_BIOS:
+        return KNOWN_EXPERT_BIOS[key]
+    # По частям (имя фамилия / фамилия имя)
+    parts = key.split()
+    if len(parts) >= 2:
+        # "имя фамилия" -> "фамилия имя"
+        reversed_key = f"{parts[-1]} {parts[0]}"
+        if reversed_key in KNOWN_EXPERT_BIOS:
+            return KNOWN_EXPERT_BIOS[reversed_key]
+    # Односложное (Пасков -> Пасков Пламен)
+    if key in KNOWN_EXPERT_FULL:
+        full = KNOWN_EXPERT_FULL[key]
+        full_key = full.lower().strip()
+        if full_key in KNOWN_EXPERT_BIOS:
+            return KNOWN_EXPERT_BIOS[full_key]
+    return ""
 
 def detect_experts(video_title, transcript, description="",
                    channel_name="", channel_type="media", channel_owner="",
@@ -107,6 +133,7 @@ def detect_experts(video_title, transcript, description="",
             experts_raw.append({
                 "name": first_p["name"],
                 "role": first_p.get("role", "guest"),
+                "specialization": _get_specialization(first_p["name"]),
                 "speaker": speaker_id,
                 "duration_sec": duration,
                 "score": first_s,
@@ -157,6 +184,7 @@ def detect_experts(video_title, transcript, description="",
         experts.append({
             "name": e["name"],
             "role": e["role"],
+            "specialization": e.get("specialization", ""),
             "speaker": e["speaker"],
             "duration_sec": e["duration_sec"],
         })

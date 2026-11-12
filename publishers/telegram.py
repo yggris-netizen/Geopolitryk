@@ -93,12 +93,39 @@ def _unique_names(experts: list[dict]) -> list[str]:
 
 
 def _speakers_block(experts: list[dict]) -> str:
-    names = _unique_names(experts)
-    if not names:
+    """Гости (СПИКЕР + специализация) + ведущие (ВЕДУЩИЙ)."""
+    if not experts:
         return "<b>СПИКЕРЫ</b>\nне определены"
-    if len(names) == 1:
-        return f"<b>СПИКЕР</b>\n{names[0]}"
-    return f"<b>СПИКЕРЫ</b>\n{', '.join(names)}"
+
+    parts = []
+
+    # 1. Гости (role=guest) со специализацией
+    guests = [e for e in experts if e.get("role") == "guest"]
+    if guests:
+        parts.append("<b>СПИКЕР</b>")
+        for g in guests:
+            spec = (g.get("specialization") or "").strip()
+            line = g["name"]
+            if spec:
+                line += f" — {spec}"
+            parts.append(line)
+
+    # 2. Ведущие (role=author) — без специализации
+    hosts = [e for e in experts if e.get("role") == "author"]
+    if hosts:
+        parts.append("<b>ВЕДУЩИЙ</b>")
+        parts.append(", ".join(h["name"] for h in hosts))
+    elif not guests:
+        # fallback: если role нет — все как гости
+        parts.append("<b>СПИКЕР</b>")
+        for e in experts:
+            spec = (e.get("specialization") or "").strip()
+            line = e["name"]
+            if spec:
+                line += f" — {spec}"
+            parts.append(line)
+
+    return "\n\n".join(parts)
 
 
 def _experts_as_string(experts: list[dict]) -> str:
