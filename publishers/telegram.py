@@ -6,6 +6,8 @@ NLI-проверка: публикуются ТОЛЬКО verified тезисы 
 
 pending_voices сохраняется ВСЕГДА (даже при NOTIFY_UNKNOWN_VOICES=False),
 уведомление владельцу о незнакомцах — по флагу NOTIFY_UNKNOWN_VOICES.
+
+P1: neutralize_title ОТКЛЮЧЁН — заголовок публикуется как есть (КАПС, эмодзи, шутки).
 """
 
 import asyncio
@@ -38,7 +40,7 @@ from services.expert_detection import detect_experts
 from services.predictions_extraction import extract_predictions
 from services.commentary import generate_commentary
 from services.summarization import (
-    generate_hashtags, neutralize_title,
+    generate_hashtags,
     _format_title,
 )
 from services.transcription import (
@@ -392,13 +394,14 @@ async def process_and_publish(video_url, video_title="", video_description="",
             print("[TOOL] ДИАГНОСТИКА: транскрибация прошла")
             return True, f"diagnostic_ok: {transcript_len}"
 
+        # P1: neutralize_title ОТКЛЮЧЁН — заголовок как есть
         display_title = video_title
-        if NEUTRALIZE_TITLE and video_title:
-            print("[STYLE] Нейтрализация...")
-            n = neutralize_title(video_title)
-            if n and n != video_title:
-                display_title = n
-                print(f"[OK] {display_title}\n")
+        # if NEUTRALIZE_TITLE and video_title:
+        #     print("[STYLE] Нейтрализация...")
+        #     n = neutralize_title(video_title)
+        #     if n and n != video_title:
+        #         display_title = n
+        #         print(f"[OK] {display_title}\n")
 
         print("[SEARCH] Спикеры...")
         experts, unknown = detect_experts(
