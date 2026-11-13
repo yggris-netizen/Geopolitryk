@@ -1,33 +1,32 @@
-"""CRUD для transcripts_raw: сырые сегменты транскриптов для Бота 3.
-
-Контракт schema_version=2:
-  transcript_json = '[{"start": 0.0, "end": 4.2, "text": "...", "speaker": "SPEAKER_01"}, ...]'
-  start/end — секунды (float).
-  speaker — ID спикера ("SPEAKER_00", "SPEAKER_01", "UNKNOWN") или "".
-"""
-
+"""CRUD для transcripts_raw (Postgres)."""
 import json
-import sqlite3
 
-from config import DB_PATH
+import psycopg2.extras
+
+from db.connection import get_conn
 
 
 def save_transcript_raw(video_id, interview_id, expert_name, source_url,
                         segments, language="ru", duration_sec=0, schema_version=2):
-    """Сохраняет сегменты транскрипта в transcripts_raw."""
     if not video_id or not segments:
         return False
     payload = json.dumps(segments, ensure_ascii=False)
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    clean_expert = "" if (expert_name or "").strip() in (
+        "Неизвестный спикер", "Неизвестный эксперт", "?") else (expert_name or "")
+    conn = get_conn()
+    cur = conn.cursor()
     try:
-        conn.execute(
-            "INSERT OR REPLACE INTO transcripts_raw "
+        cur.execute(
+            "INSERT INTO transcripts_raw "
             "(video_id, interview_id, expert_name, source_url, transcript_json, "
             " language, duration_sec, schema_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (video_id, interview_id or "",
-             "" if (expert_name or "").strip() in ("Неизвестный спикер", "Неизвестный эксперт", "?") else (expert_name or ""),
-             source_url or "",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (video_id) DO UPDATE SET "
+            "interview_id=EXCLUDED.interview_id, expert_name=EXCLUDED.expert_name, "
+            "source_url=EXCLUDED.source_url, transcript_json=EXCLUDED.transcript_json, "
+            "language=EXCLUDED.language, duration_sec=EXCLUDED.duration_sec, "
+            "schema_version=EXCLUDED.schema_version",
+            (video_id, interview_id or "", clean_expert, source_url or "",
              payload, language or "ru", int(duration_sec or 0), schema_version)
         )
         conn.commit()
@@ -36,21 +35,26 @@ def save_transcript_raw(video_id, interview_id, expert_name, source_url,
         print(f"[WARN]  save_transcript_raw: {e}")
         return False
     finally:
+        cur.close()
         conn.close()
 
 
 def get_transcript_raw(video_id):
     if not video_id:
         return None
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, video_id, interview_id, expert_name, source_url, "
-        "       transcript_json, language, duration_sec, schema_version, created_at "
-        "FROM transcripts_raw WHERE video_id = ?", (video_id,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT id, video_id, interview_id, expert_name, source_url, "
+            "       transcript_json, language, duration_sec, schema_version, created_at "
+            "FROM transcripts_raw WHERE video_id=%s", (video_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_transcript_raw_segments(video_id):
@@ -64,28 +68,32 @@ def get_transcript_raw_segments(video_id):
 
 
 def get_transcript_raw_expert_name(video_id):
-    """Возвращает expert_name из transcripts_raw (реальные имена с прошлого прогона)."""
     if not video_id:
         return ""
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    row = conn.execute(
-        "SELECT expert_name FROM transcripts_raw WHERE video_id = ?", (video_id,)
-    ).fetchone()
-    conn.close()
-    if not row:
-        return ""
-    val = (row[0] or "").strip()
-    if val in ("Неизвестный спикер", "Неизвестный эксперт", "?"):
-        return ""
-    return val
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT expert_name FROM transcripts_raw WHERE video_id=%s", (video_id,))
+        row = cur.fetchone()
+        if not row:
+            return ""
+        val = (row[0] or "").strip()
+        if val in ("Неизвестный спикер", "Неизвестный эксперт", "?"):
+            return ""
+        return val
+    finally:
+        cur.close()
+        conn.close()
 
 
 def has_transcript_raw(video_id) -> bool:
     if not video_id:
         return False
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    row = conn.execute(
-        "SELECT 1 FROM transcripts_raw WHERE video_id = ?", (video_id,)
-    ).fetchone()
-    conn.close()
-    return row is not None
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT 1 FROM transcripts_raw WHERE video_id=%s", (video_id,))
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+        conn.close()

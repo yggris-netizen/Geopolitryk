@@ -16,3 +16,4 @@ tavily-python
 rapidfuzz>=3.0.0
 # transformers — для NLI (опционально, D2 не использует)
 # pip install transformers torch
+psycopg2-binary>=2.9.9

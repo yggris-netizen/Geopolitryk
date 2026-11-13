@@ -169,6 +169,13 @@ TEST_VIDEO_TITLE = ""
 VIDEO_LANGUAGE = "ru"
 DB_PATH = os.getenv("DB_PATH", _ENV_DB_PATH)
 
+# ─── Postgres (миграция v2.1.27) ──────────────────────────
+# Обязателен. Пример: postgresql://user:pass@host:5432/geopolitryk
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    print("[WARN] DATABASE_URL не задан. Postgres-миграция требует его в .env")
+
+
 CHECK_INTERVAL_HOURS = 3
 WORKER_POLL_INTERVAL = 5
 
