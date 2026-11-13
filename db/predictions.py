@@ -167,3 +167,56 @@ def list_predictions(
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows], total
+
+
+def get_predictions_for_factcheck(days: int = 7, limit: int = 10) -> list:
+    """Прогнозы без вердикта за последние N дней."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, video_id, expert_name, channel_name, prediction_text, "
+        "       prediction_date, source_url "
+        "FROM predictions "
+        "WHERE (verdict IS NULL OR verdict = '') "
+        "  AND prediction_date >= datetime('now', ?) "
+        "ORDER BY prediction_date DESC LIMIT ?",
+        (f"-{days} days", limit)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def set_fact_check_result(pred_id: int, verdict: str,
+                          source_url: str = "", reasoning: str = "") -> bool:
+    """Записывает вердикт фактчекинга + fact_check_date.
+
+    Для unverifiable source_url НЕ перезаписывается (не подставляем YouTube-URL).
+    Для confirmed/refuted — обновляем, если передан непустой.
+    """
+    if verdict not in ("confirmed", "refuted", "unverifiable"):
+        return False
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        if verdict == "unverifiable":
+            cur = conn.execute(
+                "UPDATE predictions SET verdict = ?, verdict_date = CURRENT_TIMESTAMP, "
+                "verdict_notes = ?, fact_check_date = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (verdict, (reasoning or "")[:500], pred_id)
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE predictions SET verdict = ?, verdict_date = CURRENT_TIMESTAMP, "
+                "verdict_notes = ?, fact_check_date = CURRENT_TIMESTAMP, "
+                "source_url = COALESCE(NULLIF(?, ''), source_url) "
+                "WHERE id = ?",
+                (verdict, (reasoning or "")[:500], source_url or "", pred_id)
+            )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        print(f"[WARN]  set_fact_check_result: {e}")
+        return False
+    finally:
+        conn.close()
+

@@ -96,6 +96,16 @@ TELEGRAM_MAX_LEN = 4096
 # Tavily (Bot 3, для scripts/test_factcheck.py)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
+# ─── Бот 3: фактчекинг (встроен в Бот 1) ──────────────────
+# Раз в неделю, воскресенье 00:30 UTC (03:30 МСК), окно 7 дней.
+FACT_CHECK_ENABLED = os.getenv("FACT_CHECK_ENABLED", "1").lower() in ("1", "true", "yes")
+FACT_CHECK_DAY = os.getenv("FACT_CHECK_DAY", "sun")          # apscheduler day_of_week
+FACT_CHECK_HOUR_UTC = int(os.getenv("FACT_CHECK_HOUR_UTC", "0"))
+FACT_CHECK_MINUTE_UTC = int(os.getenv("FACT_CHECK_MINUTE_UTC", "30"))
+FACT_CHECK_WINDOW_DAYS = int(os.getenv("FACT_CHECK_WINDOW_DAYS", "7"))
+FACT_CHECK_MAX_REQUESTS = int(os.getenv("FACT_CHECK_MAX_REQUESTS", "10"))
+
+
 # Уведомления о незнакомых голосах (pending сохраняется всегда, уведомление — по флагу)
 NOTIFY_UNKNOWN_VOICES = os.getenv("NOTIFY_UNKNOWN_VOICES", "0") == "1"
 

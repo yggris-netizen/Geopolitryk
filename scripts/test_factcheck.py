@@ -125,12 +125,24 @@ def _call_llm(prompt: str) -> dict:
         models.append(GROQ_FALLBACK_MODEL)
     for model in models:
         try:
-            r = groq_client.chat.completions.create(
+            kwargs = dict(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
                 temperature=0,
                 max_tokens=600,
+                tools=[],
+                tool_choice="none",
             )
+            # reasoning_effort только для gpt-oss (try/except)
+            if "gpt-oss" in model:
+                try:
+                    r = groq_client.chat.completions.create(
+                        reasoning_effort="low", **kwargs
+                    )
+                except TypeError:
+                    r = groq_client.chat.completions.create(**kwargs)
+            else:
+                r = groq_client.chat.completions.create(**kwargs)
             raw = (r.choices[0].message.content or "").strip()
             data = _extract_json(raw)
             if data is None:
@@ -160,7 +172,10 @@ def factcheck_one(pred: dict) -> dict:
                 "source_url": "", "reasoning": "пустой текст прогноза"}
 
     clean_text = _clean_query(text)
-    query = _clean_query(f"{expert} {clean_text}")[:400]
+    if expert and expert not in ("?", "Неизвестный спикер", "Неизвестный эксперт"):
+        query = _clean_query(f"{expert} {clean_text}")[:400]
+    else:
+        query = clean_text[:400]
     print(f"\n[SEARCH] #{pid} — {clean_text[:100]}")
     print(f"   [SEARCH] Tavily: {query[:120]}")
     results = _tavily_search(query)

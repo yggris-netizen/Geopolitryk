@@ -10,6 +10,8 @@ from config import (
     CHANNELS_TO_WATCH, CHECK_INTERVAL_HOURS, HEARTBEAT_HOURS,
     MAX_VIDEOS_PER_CHANNEL_PER_CHECK,
     OWNER_USER_ID, TRANSCRIPTS_CACHE_DAYS, YOUTUBE_DAILY_QUOTA,
+    FACT_CHECK_ENABLED, FACT_CHECK_DAY,
+    FACT_CHECK_HOUR_UTC, FACT_CHECK_MINUTE_UTC,
 )
 from db.queue import (
     _add_task_to_queue, _queue_stats, _cleanup_done_tasks,
@@ -122,5 +124,18 @@ def build_scheduler(bot, shutdown_event):
         async def _hb_job():
             await _heartbeat_job(bot)
         scheduler.add_job(_hb_job, "interval", hours=HEARTBEAT_HOURS)
+
+    if FACT_CHECK_ENABLED:
+        from workers.fact_check_worker import fact_check_job
+        async def _fc_job():
+            await fact_check_job(bot)
+        scheduler.add_job(
+            _fc_job, "cron",
+            day_of_week=FACT_CHECK_DAY,
+            hour=FACT_CHECK_HOUR_UTC,
+            minute=FACT_CHECK_MINUTE_UTC,
+        )
+        print(f"[FACT] Планировщик: фактчекинг ({FACT_CHECK_DAY} "
+              f"{FACT_CHECK_HOUR_UTC:02d}:{FACT_CHECK_MINUTE_UTC:02d} UTC)")
 
     return scheduler
