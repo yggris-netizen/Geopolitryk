@@ -96,6 +96,11 @@ TELEGRAM_MAX_LEN = 4096
 # Tavily (Bot 3, для scripts/test_factcheck.py)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
+# ─── rclone: передача аудио на сервер (SFTP) ───────────────
+RCLONE_PATH = os.getenv("RCLONE_PATH", "")
+RCLONE_REMOTE = os.getenv("RCLONE_REMOTE", "")
+
+
 # ─── Бот 3: фактчекинг (встроен в Бот 1) ──────────────────
 # Раз в неделю, воскресенье 00:30 UTC (03:30 МСК), окно 7 дней.
 FACT_CHECK_ENABLED = os.getenv("FACT_CHECK_ENABLED", "1").lower() in ("1", "true", "yes")
