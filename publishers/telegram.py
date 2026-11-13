@@ -326,7 +326,8 @@ async def notify_owner_about_unknown(video_url, video_title, channel_name,
 async def process_and_publish(video_url, video_title="", video_description="",
                                video_duration=0, video_published_at="",
                                channel_name="", channel_type="",
-                               channel_owner="", skip_duration_check=False) -> tuple:
+                               channel_owner="", skip_duration_check=False,
+                               audio_file_override=None) -> tuple:
     print(f"\n{'=' * 60}")
     print(f"ОБРАБОТКА: {video_url}")
     if video_title:
@@ -335,7 +336,8 @@ async def process_and_publish(video_url, video_title="", video_description="",
         print(f"  Канал: {channel_name}")
     print(f"{'=' * 60}\n")
 
-    audio_file = None
+    audio_file = audio_file_override
+    audio_from_caller = audio_file_override is not None
     try:
         duration = video_duration
         published_at = video_published_at
@@ -382,14 +384,17 @@ async def process_and_publish(video_url, video_title="", video_description="",
         clusters = []
 
         if not transcript_text:
-            print("[DL] Шаг 1/4: Скачивание...")
-            try:
-                audio_file = await asyncio.to_thread(download_audio, video_url)
-            except CookiesExpiredError as e:
-                print(f"   [COOKIE] CookiesExpiredError: {e}")
-                await _notify_cookies_expired(video_url, str(e))
-                return False, "cookies_expired"
-            print("[OK] Скачано\n")
+            if not audio_from_caller:
+                print("[DL] Шаг 1/4: Скачивание...")
+                try:
+                    audio_file = await asyncio.to_thread(download_audio, video_url)
+                except CookiesExpiredError as e:
+                    print(f"   [COOKIE] CookiesExpiredError: {e}")
+                    await _notify_cookies_expired(video_url, str(e))
+                    return False, "cookies_expired"
+                print("[OK] Скачано\n")
+            else:
+                print(f"[DL] аудио передано извне: {audio_file}\n")
 
             print("[MIC] Шаг 2/4: Транскрибация...")
             transcript_text, transcript_segments = await asyncio.to_thread(
@@ -405,7 +410,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 if clusters:
                     transcript_segments = assign_speakers_to_segments(transcript_segments, clusters)
 
-            if audio_file and os.path.exists(audio_file):
+            if audio_file and os.path.exists(audio_file) and not audio_from_caller:
                 try:
                     os.remove(audio_file)
                     print("🧹 аудио удалено")
@@ -554,7 +559,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
         err_msg = str(e)[:500]
         print(f"\n[ERR] {err_type}: {err_msg}")
         traceback.print_exc()
-        if audio_file and os.path.exists(audio_file):
+        if audio_file and os.path.exists(audio_file) and not audio_from_caller:
             try:
                 os.remove(audio_file)
             except Exception as e:
