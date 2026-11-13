@@ -34,7 +34,10 @@ from db.pending_voices import save_pending
 from db.predictions import _save_predictions
 from db.summaries import _save_summary
 from db.transcripts import get_cached_transcript, save_cached_transcript
-from db.transcripts_raw import save_transcript_raw, get_transcript_raw_segments
+from db.transcripts_raw import (
+    save_transcript_raw, get_transcript_raw_segments,
+    get_transcript_raw_expert_name,
+)
 from handlers.voice_registration import build_unknown_notification
 from services.expert_detection import detect_experts
 from services.predictions_extraction import (
@@ -367,6 +370,7 @@ async def process_and_publish(video_url, video_title="", video_description="",
         if not published_at:
             extra = await asyncio.to_thread(get_video_info_ytdlp, video_url)
             published_at = extra.get("published_at", "")
+        print(f"[INFO] description: {len(video_description or '')} символов")
 
         transcript_text = ""
         if vid:
@@ -435,12 +439,27 @@ async def process_and_publish(video_url, video_title="", video_description="",
         #         print(f"[OK] {display_title}\n")
 
         print("[SEARCH] Спикеры...")
-        experts, unknown = detect_experts(
-            video_title, transcript_text,
-            channel_name=channel_name,
-            clusters=clusters,
-            video_url=video_url,
-        )
+        # 1) Приоритет: transcripts_raw (реальные имена с прошлого voice-прогона)
+        experts = []
+        unknown = []
+        if vid:
+            cached_experts = get_transcript_raw_expert_name(vid)
+            if cached_experts:
+                names = [n.strip() for n in cached_experts.split(",") if n.strip()]
+                experts = [{
+                    "name": n, "role": "guest", "specialization": "",
+                    "speaker": "", "duration_sec": 0,
+                } for n in names]
+                print(f"   [OK] experts из transcripts_raw: {cached_experts}")
+        # 2) Если пусто — detect_experts (voice + fallback description/channel)
+        if not experts:
+            experts, unknown = detect_experts(
+                video_title, transcript_text,
+                description=video_description,
+                channel_name=channel_name,
+                clusters=clusters,
+                video_url=video_url,
+            )
         for e in experts:
             spk = f" [{e.get('speaker', '')}]" if e.get("speaker") else ""
             print(f"   [OK] {e['name']}{spk}")

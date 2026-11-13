@@ -25,7 +25,9 @@ def save_transcript_raw(video_id, interview_id, expert_name, source_url,
             "(video_id, interview_id, expert_name, source_url, transcript_json, "
             " language, duration_sec, schema_version) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (video_id, interview_id or "", expert_name or "", source_url or "",
+            (video_id, interview_id or "",
+             "" if (expert_name or "").strip() in ("Неизвестный спикер", "Неизвестный эксперт", "?") else (expert_name or ""),
+             source_url or "",
              payload, language or "ru", int(duration_sec or 0), schema_version)
         )
         conn.commit()
@@ -59,6 +61,23 @@ def get_transcript_raw_segments(video_id):
         return json.loads(row["transcript_json"])
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def get_transcript_raw_expert_name(video_id):
+    """Возвращает expert_name из transcripts_raw (реальные имена с прошлого прогона)."""
+    if not video_id:
+        return ""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    row = conn.execute(
+        "SELECT expert_name FROM transcripts_raw WHERE video_id = ?", (video_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return ""
+    val = (row[0] or "").strip()
+    if val in ("Неизвестный спикер", "Неизвестный эксперт", "?"):
+        return ""
+    return val
 
 
 def has_transcript_raw(video_id) -> bool:

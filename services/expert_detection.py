@@ -74,13 +74,74 @@ def _get_specialization(name: str) -> str:
             return KNOWN_EXPERT_BIOS[full_key]
     return ""
 
+def _match_experts_in_text(text: str) -> list:
+    """Ищет полные имена (2+ слова) из KNOWN_EXPERT_BIOS в тексте (без односложных)."""
+    if not text:
+        return []
+    low = text.lower()
+    found = []
+    seen = set()
+    for key, spec in KNOWN_EXPERT_BIOS.items():
+        parts = key.split()
+        if len(parts) < 2:
+            continue  # односложные (сытник, дубов) — пропускаем
+        if key in low and key not in seen:
+            seen.add(key)
+            found.append({"key": key, "spec": spec, "role": "guest"})
+    return found
+
+
+def _fallback_experts(description: str, video_title: str, channel_name: str) -> list:
+    """Fallback: description -> channel_raw.
+
+    ВАЖНО:
+      - video_title НЕ ищем (тупик: заголовки обрезаны, "Ще..." вместо "Щелин").
+      - channel_name НЕ нормализуем (не сравниваем с KNOWN_EXPERT_BIOS по словам).
+      - channel_name идёт как author "как есть" (последний резерв).
+    """
+    # 1. description — поиск полных имён (2+ слова)
+    matches = _match_experts_in_text(description or "")
+    if matches:
+        experts = []
+        for m in matches:
+            name = m["key"]
+            experts.append({
+                "name": name.title() if name == name.lower() else name,
+                "role": "guest",
+                "specialization": m["spec"],
+                "speaker": "",
+                "duration_sec": 0,
+                "score": 0.0,
+                "_fallback": "description",
+            })
+        return experts
+
+    # 2. последний резерв — channel_name как author, БЕЗ нормализации
+    if (channel_name or "").strip():
+        return [{
+            "name": channel_name.strip(),
+            "role": "author",
+            "specialization": "",
+            "speaker": "",
+            "duration_sec": 0,
+            "score": 0.0,
+            "_fallback": "channel_raw",
+        }]
+    return []
+
+
 def detect_experts(video_title, transcript, description="",
                    channel_name="", channel_type="media", channel_owner="",
                    speaker_transcript: str = "", clusters: list = None,
                    video_url: str = ""):
     """Возвращает (experts, unknown)."""
     if not clusters:
-        print("   [WARN]  voice_identification: кластеров нет")
+        print("   [WARN]  voice_identification: кластеров нет -> fallback")
+        fb = _fallback_experts(description or "", video_title or "", channel_name or "")
+        if fb:
+            src = fb[0].get("_fallback", "?")
+            print(f"   [OK] fallback ({src}): {', '.join(e['name'] for e in fb)}")
+            return fb, []
         return [], []
 
     print(f"   → Режим: voice fingerprinting ({len(clusters)} кластеров)")

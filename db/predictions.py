@@ -10,6 +10,9 @@ def _save_predictions(video_id, expert_name, channel_name, predictions_list,
     """Сохраняет прогнозы. speaker_id — ID спикера (SPK_XX) из voice identification."""
     if not predictions_list:
         return 0
+    if (expert_name or "").strip() in ("Неизвестный спикер", "Неизвестный эксперт", "?"):
+        print(f"[SKIP] _save_predictions: expert_name='{expert_name}' — не сохраняю")
+        return 0
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     saved = 0
     try:
