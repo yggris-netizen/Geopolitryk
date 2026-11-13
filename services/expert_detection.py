@@ -251,6 +251,16 @@ def detect_experts(video_title, transcript, description="",
         })
         print(f"   [OK] {e['speaker']} → {name} (kept, {e['duration_sec']:.0f}с)")
 
+    # v3: если voice не определил никого (clusters были, но профили не совпали) -> fallback
+    if not experts:
+        print("   [WARN]  voice: профили не совпали -> fallback")
+        fb = _fallback_experts(description or "", video_title or "", channel_name or "")
+        if fb:
+            src = fb[0].get("_fallback", "?")
+            names = ", ".join(x["name"] for x in fb)
+            print(f"   [OK] fallback ({src}): {names}")
+            experts = fb
+
     # Дедупликация unknown между собой (cos > 0.85)
     unknown = []
     for cand in unknown_candidates:
