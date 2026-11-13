@@ -15,7 +15,8 @@ def _add_task_to_queue(video_url, video_id="", video_title="", video_published_a
     try:
         if video_id:
             row = conn.execute(
-                "SELECT id FROM task_queue WHERE video_id = ? AND status IN ('pending','processing')",
+                "SELECT id FROM task_queue WHERE video_id = ? "
+                "AND status IN ('pending','processing','uploaded','processed')",
                 (video_id,)
             ).fetchone()
             if row:
@@ -24,7 +25,8 @@ def _add_task_to_queue(video_url, video_id="", video_title="", video_published_a
                 return None
         else:
             row = conn.execute(
-                "SELECT id FROM task_queue WHERE video_url = ? AND status IN ('pending','processing')",
+                "SELECT id FROM task_queue WHERE video_url = ? "
+                "AND status IN ('pending','processing','uploaded','processed')",
                 (video_url,)
             ).fetchone()
             if row:
@@ -136,6 +138,74 @@ def _mark_task_retry_tpd(task_id, error_message):
     print(f"   [TPD]  #{task_id} -> ждём до {next_reset_str} UTC (03:00 МСК), attempts не расходуем")
 
 
+def _get_next_task_by_status(status):
+    """Универсальный getter: pending (Downloader) / uploaded (Processor) / processed (Publisher)."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM task_queue WHERE status = ? "
+        "AND attempts < ? "
+        "AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) "
+        "ORDER BY priority DESC, created_at ASC LIMIT 1",
+        (status, MAX_TASK_ATTEMPTS)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _mark_task_uploaded(task_id, remote_path=""):
+    """Downloader: pending -> uploaded (аудио загружено через rclone)."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        conn.execute(
+            "UPDATE task_queue SET status = 'uploaded', "
+            "remote_path = ?, "
+            "started_at = NULL, "
+            "finished_at = NULL, "
+            "error_message = NULL, "
+            "next_retry_at = NULL "
+            "WHERE id = ?",
+            (remote_path or "", task_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"   [OK] #{task_id} -> uploaded ({remote_path or '—'})")
+
+
+def _mark_task_processed(task_id):
+    """Processor: uploaded -> processed (D3 готов, ждёт публикации)."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        conn.execute(
+            "UPDATE task_queue SET status = 'processed', "
+            "finished_at = NULL, "
+            "error_message = NULL "
+            "WHERE id = ?",
+            (task_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"   [OK] #{task_id} -> processed")
+
+
+def _mark_task_published(task_id):
+    """Publisher: processed -> published (опубликовано в Telegram)."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        conn.execute(
+            "UPDATE task_queue SET status = 'published', "
+            "finished_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (task_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"   [OK] #{task_id} -> published")
+
+
 def _handle_task_failure(task_id, reason, attempts_now):
     if "tpd_exhausted" in (reason or "").lower():
         _mark_task_retry_tpd(task_id, reason)
@@ -191,12 +261,16 @@ def _queue_stats():
     return {r[0]: r[1] for r in rows}
 
 
-def _queue_list(limit=20):
+def _queue_list(limit=20, statuses=None):
+    if statuses is None:
+        statuses = ('pending', 'processing')
+    placeholders = ",".join("?" * len(statuses))
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM task_queue WHERE status IN ('pending','processing') "
-        "ORDER BY priority DESC, created_at ASC LIMIT ?", (limit,)
+        f"SELECT * FROM task_queue WHERE status IN ({placeholders}) "
+        f"ORDER BY priority DESC, created_at ASC LIMIT ?",
+        (*statuses, limit)
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -217,7 +291,7 @@ def _recent_errors(limit=10):
 def _cleanup_done_tasks(days_keep=3):
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.execute(
-        "DELETE FROM task_queue WHERE status IN ('done','error') "
+        "DELETE FROM task_queue WHERE status IN ('done','error','published') "
         "AND finished_at < datetime('now', ?)", (f'-{days_keep} days',)
     )
     conn.commit()

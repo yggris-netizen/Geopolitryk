@@ -174,6 +174,12 @@ def _init_db():
         conn.execute("ALTER TABLE task_queue ADD COLUMN next_retry_at TIMESTAMP")
         print("[RETRY] Миграция: добавлена колонка next_retry_at")
 
+    try:
+        conn.execute("SELECT remote_path FROM task_queue LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE task_queue ADD COLUMN remote_path TEXT")
+        print("[RETRY] Миграция: добавлена колонка task_queue.remote_path")
+
     # Миграции для predictions (source_url, fact_check_date, speaker_id)
     try:
         conn.execute("SELECT source_url FROM predictions LIMIT 1")
