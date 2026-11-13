@@ -85,20 +85,6 @@ DIAGNOSTIC_MODE = os.getenv("DIAGNOSTIC_MODE", "0") == "1"
 # Отладочный вывод загрузки ([SEARCH] [N/10] ...). Включать: DEBUG_BOOT=1 в .env
 DEBUG_BOOT = os.getenv("DEBUG_BOOT", "0").lower() in ("1", "true", "yes")
 
-# ─── GigaChat (fallback для Groq) ──────────────────────
-# Authorization Key (длинная строка из личного кабинета Sber Studio).
-GIGACHAT_AUTH_KEY = os.getenv("GIGACHAT_AUTH_KEY", "")
-USE_GIGACHAT = os.getenv("USE_GIGACHAT", "0").lower() in ("1", "true", "yes")
-GIGACHAT_MODEL_LOW = os.getenv("GIGACHAT_MODEL_LOW", "GigaChat-2")
-GIGACHAT_MODEL_HIGH = os.getenv("GIGACHAT_MODEL_HIGH", "GigaChat-2-Pro")
-
-# ─── Локальная модель (Ollama) — fallback для MAP ─────
-# Saiga-Llama3-8B: 8B, русский, 8192 контекст. RusMind — запасная.
-USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "0").lower() in ("1", "true", "yes")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "akdengi/saiga-llama3-8b:latest")
-OLLAMA_MODEL_FALLBACK = os.getenv("OLLAMA_MODEL_FALLBACK", "hf.co/DICPlay/RusMind-Zernyshko-2.0-GGUF:latest")
-
 
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
 GROQ_MAX_CHUNK_SECONDS = int(os.getenv("GROQ_MAX_CHUNK_SECONDS", "300"))

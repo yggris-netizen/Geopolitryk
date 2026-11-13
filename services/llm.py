@@ -4,10 +4,6 @@ from groq import Groq
 from services.environment import GROQ_API_BASE, PROXY_URL
 from config import GROQ_API_KEY
 from db.token_usage import can_call, log_usage, mark_exhausted
-from services.gigachat import gigachat_chat_create
-from services.local_llm import local_chat_create
-from config import USE_GIGACHAT
-from config import USE_LOCAL_LLM
 
 # timeout=60s: не висеть бесконечно при сетевых проблемах.
 # max_retries=0: свои ретраи уже реализованы в summarization._call_groq_with_retry,
@@ -56,36 +52,6 @@ def groq_chat_create(task=None, **kwargs):
     model = kwargs.get("model", "")
     if model and not can_call(model, estimated_tokens=0):
         print(f"[TPD] {model}: лимит исчерпан (>=90%), пропуск")
-        # 1) локальная модель — для Map (low), 0 TPD, без blacklist
-        if USE_LOCAL_LLM:
-            try:
-                print(f"[TPD] -> Local (task={task})")
-                return local_chat_create(
-                    task=task or "low",
-                    messages=kwargs.get("messages") or [],
-                )
-            except Exception as _le:
-                print(f"[TPD] Local failed: {_le!r}")
-        # 2) GigaChat — для REDUCE/прочего (MAP он блокирует)
-        if USE_GIGACHAT:
-            try:
-                _gc_task = task or "low"
-                print(f"[TPD] -> GigaChat (task={_gc_task})")
-                _content = gigachat_chat_create(
-                    task=_gc_task,
-                    messages=kwargs.get("messages"),
-                    max_tokens=kwargs.get("max_tokens", 2000),
-                    temperature=kwargs.get("temperature", 0.2),
-                )
-                class _R:
-                    class _C:
-                        class _M:
-                            content = _content
-                        message = _M()
-                    choices = [_C()]
-                return _R()
-            except Exception as _e:
-                print(f"[TPD] GigaChat failed: {_e!r}")
         raise RuntimeError(f"tpd_exhausted:{model}")
 
     # Circuit breaker (как было)

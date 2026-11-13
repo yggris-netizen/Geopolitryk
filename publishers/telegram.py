@@ -37,8 +37,12 @@ from db.transcripts import get_cached_transcript, save_cached_transcript
 from db.transcripts_raw import save_transcript_raw, get_transcript_raw_segments
 from handlers.voice_registration import build_unknown_notification
 from services.expert_detection import detect_experts
-from services.predictions_extraction import extract_predictions
-from services.commentary import generate_commentary
+from services.predictions_extraction import (
+    extract_predictions, extract_predictions_from_theses,
+)
+from services.commentary import (
+    generate_commentary, generate_commentary_with_theses,
+)
 from services.summarization import (
     generate_hashtags,
     _format_title,
@@ -468,7 +472,9 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 print(f"[SAVE] сегменты из transcripts_raw: {len(transcript_segments)}\n")
 
         print("[LLM] Шаг 3/4: Комментарий...")
-        commentary_text = generate_commentary(transcript_text, transcript_segments)
+        commentary_text, all_theses = generate_commentary_with_theses(
+            transcript_text, transcript_segments
+        )
         if not commentary_text or len(commentary_text) < COMMENTARY_MIN_CHARS:
             msg = (
                 f"[WARN] <b>Не публикую</b>: комментарий пуст или короткий\n\n"
@@ -506,7 +512,11 @@ async def process_and_publish(video_url, video_title="", video_description="",
                 print(f"[PAUSE]  пауза {GROQ_PREDICTIONS_PAUSE}с перед прогнозами...")
                 await asyncio.sleep(GROQ_PREDICTIONS_PAUSE)
                 print("[STAT] Прогнозы...")
-                preds = extract_predictions(transcript_text, experts_str)
+                if all_theses and len(all_theses) >= 5:
+                    preds = extract_predictions_from_theses(all_theses, experts_str)
+                else:
+                    print(f"   [STAT] тезисов {len(all_theses) if all_theses else 0} < 5, fallback на extract_predictions")
+                    preds = extract_predictions(transcript_text, experts_str)
                 if preds:
                     saved = _save_predictions(
                         vid, experts_str, channel_name, preds,

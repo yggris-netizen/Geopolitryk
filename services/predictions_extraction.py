@@ -189,3 +189,50 @@ def extract_predictions(transcript, expert_name):
     except Exception as e:
         print(f"[WARN]  прогнозы (parse): {e}")
         return []
+
+
+def extract_predictions_from_theses(theses: list, expert_name: str) -> list:
+    """Извлекает прогнозы из тезисов Map (без LLM).
+
+    theses: [{"text", "is_important", "is_forecast", "start", "quote"}]
+    Фильтр is_forecast -> prediction_text (quote приоритетнее text).
+    Валидация годов/длины — через _parse_response.
+    """
+    if not EXTRACT_PREDICTIONS:
+        return []
+    if not theses:
+        print("   [STAT] прогнозов из тезисов: 0 (нет тезисов)")
+        return []
+
+    now_utc = datetime.now(timezone.utc)
+    current_year = now_utc.year
+    max_year = current_year + MAX_PREDICTION_HORIZON_YEARS
+
+    forecasts = [t for t in theses if t.get("is_forecast")]
+    if not forecasts:
+        print("   [STAT] прогнозов из тезисов: 0 (нет is_forecast)")
+        return []
+
+    raw_texts = []
+    for t in forecasts:
+        quote = (t.get("quote") or "").strip()
+        ttext = (t.get("text") or "").strip()
+        chosen = quote if len(quote) >= 15 else ttext
+        if chosen:
+            raw_texts.append(chosen)
+
+    if not raw_texts:
+        print("   [STAT] прогнозов из тезисов: 0 (пустые тексты)")
+        return []
+
+    try:
+        parsed = _parse_response(
+            json.dumps(raw_texts, ensure_ascii=False), current_year, max_year
+        )
+    except Exception as e:
+        print(f"   [WARN]  прогнозы из тезисов (parse): {e}")
+        return []
+
+    print(f"   [STAT] прогнозов из тезисов: {len(parsed)} (из {len(forecasts)} is_forecast)")
+    return parsed
+

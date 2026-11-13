@@ -126,11 +126,14 @@ def _quote_from_segments(start: float, segments: list,
 # ═══════════════════════════════════════════════════════════
 def _extract_theses_chunk(chunk: str, chunk_offset_sec: float = 0,
                           task: str = "low") -> dict:
-    """Map: важные тезисы + связки (только question + start).
+    """Map: тезисы с флагами is_important/is_forecast/start + связки.
 
-    task="low" (20b) / "medium" (120b) — чередование (C).
+    Возвращает: {"theses": [{"text": str, "is_important": bool,
+                              "is_forecast": bool, "start": float}],
+                 "qa_pairs": [...]}
+    quote для тезисов не возвращается — извлекается в generate_commentary.
     """
-    prompt = f"""Ты — аналитик. Прочитай фрагмент интервью и выдели ТОЛЬКО важное.
+    prompt = f"""Ты — аналитик. Прочитай фрагмент интервью и выдели важное.
 
 ТЕКСТ:
 ---
@@ -139,23 +142,28 @@ def _extract_theses_chunk(chunk: str, chunk_offset_sec: float = 0,
 
 ЗАДАЧА:
 1. Найди ВАЖНЫЕ ТЕЗИСЫ по темам: геополитика, политика, экономика.
-2. ИГНОРИРУЙ: приветствия, даты ("сегодня 9 ноября"), шутки, междометия, воду ("на самом деле", "вот-вот").
-3. Тезисы формулируй БЛИЗКО К ТЕКСТУ: сохраняй смысл и формулировки эксперта, но ИСПРАВЛЯЙ ошибки распознавания (например, «Армус» → «Ормуз», «Хексет» → «Хегсет»). 1-2 предложения на тезис, грамматически корректно.
-4. Если есть ЧЁТКАЯ СВЯЗКА "вопрос ведущего -> развёрнутый ответ эксперта" — выдели отдельно:
-   - question: дословный вопрос ведущего (скопируй символ в символ).
-   - start: секунды от начала фрагмента (когда начинается ОТВЕТ эксперта).
+2. ИГНОРИРУЙ: приветствия, даты, шутки, междометия, воду.
+3. Тезисы формулируй БЛИЗКО К ТЕКСТУ. 1-2 предложения на тезис.
+4. Для КАЖДОГО тезиса поставь флаги:
+   - is_important: true — если тезис важен для пересказа (обычно true)
+   - is_forecast: true — если тезис содержит ПРОГНОЗ или утверждение
+     О БУДУЩЕМ (мнение, вероятность, сценарий, срок). Иначе false.
+   - start: секунды от начала фрагмента (когда начинается тезис)
+5. Если есть ЧЁТКАЯ СВЯЗКА "вопрос ведущего -> ответ эксперта":
+   - question: дословный вопрос ведущего
+   - start: секунды от начала фрагмента (когда начинается ОТВЕТ)
 
-Верни ТОЛЬКО JSON, без markdown, без пояснений:
-{{"theses": ["тезис 1", "тезис 2"], "qa_pairs": [{{"question": "...", "start": 0.0}}]}}
+Верни ТОЛЬКО JSON, без markdown:
+{{"theses": [{{"text": "тезис 1", "is_important": true, "is_forecast": false, "start": 12.5}}], "qa_pairs": [{{"question": "...", "start": 0.0}}]}}
 
 JSON:"""
     try:
         raw = _call_groq_with_retry(
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=3000,  # C: 2000 -> 3000 (JSON не обрезан)
+            max_tokens=3000,
             temperature=0.2,
             reasoning_effort="low",
-            task=task,  # C: "low" (20b) или "medium" (120b)
+            task=task,
         )
         if not raw:
             print(f"      [WARN]  theses: пустой ответ")
@@ -165,8 +173,21 @@ JSON:"""
             print(f"      [WARN]  theses: не JSON, raw={raw[:150]!r}")
             return {"theses": [], "qa_pairs": []}
         if isinstance(data, dict):
-            theses = data.get("theses", []) or []
+            theses_raw = data.get("theses", []) or []
             qa_pairs = data.get("qa_pairs", []) or []
+            theses = []
+            for t in theses_raw:
+                if not isinstance(t, dict):
+                    continue
+                text = (t.get("text") or "").strip()
+                if not text:
+                    continue
+                theses.append({
+                    "text": text,
+                    "is_important": bool(t.get("is_important", True)),
+                    "is_forecast": bool(t.get("is_forecast", False)),
+                    "start": _safe_float(t.get("start"), 0.0) + chunk_offset_sec,
+                })
             for qa in qa_pairs:
                 if isinstance(qa, dict):
                     start_raw = qa.get("start")
@@ -217,7 +238,8 @@ def _build_commentary(theses: list, qa_pairs: list) -> str:
     if not theses and not qa_pairs:
         return ""
 
-    theses_text = "\n".join(f"- {t}" for t in theses[:20]) if theses else "(нет)"
+    important = [t for t in theses if t.get("is_important")] if theses else []
+    theses_text = "\n".join(f"- {t['text']}" for t in important[:20]) if important else "(нет)"
     qa_text = "\n".join(
         f'- Вопрос: «{qa.get("question", "")}» -> Ответ: «{qa.get("quote", "")}» [{_fmt_dur(qa.get("start", 0))}]'
         for qa in qa_pairs[:MAX_COMMENTARY_QUOTES]
@@ -258,8 +280,9 @@ def _build_commentary(theses: list, qa_pairs: list) -> str:
 
 def _fallback_theses(theses: list, qa_pairs: list) -> str:
     parts = []
-    if theses:
-        parts.append(" ".join(t.strip() for t in theses[:8] if t))
+    important = [t for t in theses if t.get("is_important")] if theses else []
+    if important:
+        parts.append(" ".join(t["text"].strip() for t in important[:8] if t.get("text")))
     for qa in qa_pairs[:2]:
         q = qa.get("quote", "")
         if q:
@@ -270,7 +293,7 @@ def _fallback_theses(theses: list, qa_pairs: list) -> str:
 # ═══════════════════════════════════════════════════════════
 # Главная: D3 (один проход Map, чередование моделей)
 # ═══════════════════════════════════════════════════════════
-def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
+def generate_commentary_with_theses(transcript_text: str, transcript_segments: list) -> tuple:
     """D3: Map-Reduce, один проход, без NLI (A+C, чередование)."""
     if not transcript_text or not transcript_segments:
         return ""
@@ -314,4 +337,10 @@ def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
         print(f"      [WARN]  commentary < {COMMENTARY_MIN_CHARS} -> fallback")
         text = _fallback_theses(all_theses, verified_qa)
 
-    return _fix_names(text.strip())
+    return _fix_names(text.strip()), all_theses
+
+
+def generate_commentary(transcript_text: str, transcript_segments: list) -> str:
+    """Обёртка для обратной совместимости — возвращает только text."""
+    text, _ = generate_commentary_with_theses(transcript_text, transcript_segments)
+    return text

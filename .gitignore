@@ -89,3 +89,6 @@ bot_v2026-10-23.py
 russian_trusted_root_ca_pem.crt
 *.bak*
 storage/
+
+# v2.1.21-local: экспорт GigaChat/Ollama для другого проекта
+_export_for_other_project/

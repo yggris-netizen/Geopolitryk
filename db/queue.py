@@ -2,6 +2,7 @@
 
 import random
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from config import DB_PATH, MAX_TASK_ATTEMPTS, _classify_error
 from db.videos import _is_video_processed
@@ -112,7 +113,33 @@ def _mark_task_retry(task_id, error_message):
           f"(attempts={attempts}, err={error_message[:80]})")
 
 
+def _mark_task_retry_tpd(task_id, error_message):
+    """TPD исчерпан: ждём до 03:00 МСК (00:00 UTC). attempts НЕ расходуем."""
+    now_utc = datetime.now(timezone.utc)
+    next_reset = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    next_reset_str = next_reset.strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        conn.execute(
+            "UPDATE task_queue SET status = 'pending', "
+            "error_message = ?, "
+            "next_retry_at = ?, "
+            "attempts = MAX(0, attempts - 1), "
+            "started_at = NULL, "
+            "finished_at = NULL "
+            "WHERE id = ?",
+            (error_message[:2000], next_reset_str, task_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"   [TPD]  #{task_id} -> ждём до {next_reset_str} UTC (03:00 МСК), attempts не расходуем")
+
+
 def _handle_task_failure(task_id, reason, attempts_now):
+    if "tpd_exhausted" in (reason or "").lower():
+        _mark_task_retry_tpd(task_id, reason)
+        return
     err_class = _classify_error(reason)
     if err_class != "fatal" and attempts_now < MAX_TASK_ATTEMPTS:
         _mark_task_retry(task_id, reason)
